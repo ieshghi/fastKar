@@ -12,7 +12,7 @@
 #setDTthreads(1) #otherwise stuff just randomly breaks
 
 test.walks.with.hic <- function(walkset,hic.data,resolution=1e5,mc.cores=1,return='scores'){
-    if(!is.list(walkset))
+    if(!is.list(walkset)){
         stop('Give me multiple walks with the same footprint in a list to compare!')
     }
     firstwalk = walkset[[1]]
