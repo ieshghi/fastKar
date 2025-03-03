@@ -1,47 +1,11 @@
 # In this file I define some functions used in the prediction of 3D structure at rearrangements.
-#.libPaths(c("~/r-libs/R-4.0.2","/gpfs/commons/groups/imielinski_lab/lib/R-4.0.2"))
-#library(skitools)
-#library(gGnome)
-#library(GxG)
-#library(pracma)
-#library(data.table)
-#library(MASS)
-#library(gUtils)
-#devtools::load_all("/gpfs/commons/home/ieshghi/git/ietools")
-#devtools::load_all("/gpfs/commons/home/ieshghi/git/gTrack")
-#setDTthreads(1) #otherwise stuff just randomly breaks
-
-test.walks.with.hic <- function(walkset,hic.data,resolution=1e5,mc.cores=1,return='scores'){
-    if(!is.list(walkset)){
-        stop('Give me multiple walks with the same footprint in a list to compare!')
-    }
-    firstwalk = walkset[[1]]
-    target=firstwalk$footprint
-    depth.est = estimate.depthratio(hic.data,resolution)
-    predictions = mclapply(walkset,function(w){
-        return(run_analysis(w,target_region=target,if.comps=F,pix.size=resolution,mc.cores=1,verbose=F,if.sum=T,depth=depth.est,model=0))
-    },mc.cores=mc.cores)
-    rebin.data = (hic.data$disjoin(predictions[[1]]$gr))$agg(predictions[[1]]$gr) #make sure data is aggregated on the same GRanges as the predictions
-
-    if (return=='scores'){
-        scores = mclapply(predictions,function(pred){compmaps(pred,rebin.data,ifsum=TRUE,theta=3)},mc.cores=mc.cores)
-        return(scores)
-    } else if (return=='scoremaps'){
-        scoremaps = mclapply(predictions,function(pred){compmaps(pred,rebin.data,ifsum=FALSE,theta=3)},mc.cores=mc.cores)
-        return(scoremaps)
-    } else if (return=='predictions'){
-        return(predictions)
-    }
-}
 
 run_analysis <- function(walks,target_region=NULL,if.comps=FALSE,pix.size=1e5,mc.cores=20,verbose=FALSE,if.sum=TRUE,depth=1,model=0){
-    #lookup_path = '/gpfs/commons/home/ieshghi/Projects/contacts_sv_correction/data/100kb_lookupfile.rds' #lookup file for distance-dependent AA/AB/BB contact probabilities. 
-    lookup_path = '/gpfs/commons/home/ieshghi/Projects/contacts_sv_correction/data/100kb_iqr_lookupfile.rds' #lookup file for distance-dependent AA/AB/BB contact probabilities. 
+    lookup_data = medium_lookup
     if (pix.size==1e4){
-        lookup_path = '/gpfs/commons/home/ieshghi/Projects/contacts_sv_correction/data/10kb_lookupfile.rds' #lookup file for distance-dependent AA/AB/BB contact probabilities. 
+        lookup_data = small_lookup 
     }else if(pix.size==1e6){
-        lookup_path = '/gpfs/commons/home/ieshghi/Projects/contacts_sv_correction/data/1mb_lookupfile.rds' #lookup file for distance-dependent AA/AB/BB contact probabilities. 
-
+        lookup_data = big_lookup 
     }
     lookup_data = readRDS(lookup_path)
     keep.seqs = si2gr(seqlengths(walks)[names(seqlengths(walks)) %in% c(1:22,'X','Y')])
@@ -57,8 +21,7 @@ run_analysis <- function(walks,target_region=NULL,if.comps=FALSE,pix.size=1e5,mc
     }else if(if.comps=='rand'){
         comps.gr = 'rand'
     }else{
-        compartment_path = '/gpfs/commons/home/ieshghi//Projects/contacts_sv_correction/data/gm12878_comps.rds' #compartment annotations
-        comps.gr = suppressWarnings(gr.fix(gr.nochr(readRDS(compartment_path)),keep.seqs,drop=TRUE))
+        comps.gr = suppressWarnings(gr.fix(gr.nochr(compartment_lookup),keep.seqs,drop=TRUE))
     }
     #
     target_region = gr.fix(target_region,keep.seqs,drop=TRUE)
@@ -160,11 +123,7 @@ eval_comps <- function(tiled.walk,comps.gr=NULL){
     return(tiled.walk)
 }
 
-simulate_hic  <-  function(gr,lookup_data=NULL,is.circular=FALSE,model=0){
-    if(is.null(lookup_data)){
-        lookup_path = '/gpfs/commons/home/ieshghi/Projects/contacts_sv_correction/data/evenchroms_lookupfile.rds' 
-        lookup_data = readRDS(lookup_path)
-    }
+simulate_hic  <-  function(gr,lookup_data,is.circular=FALSE,model=0){
     grdt = gr2dt(gr)
     widths = grdt$width
     ends = grdt$end
@@ -179,9 +138,6 @@ simulate_hic  <-  function(gr,lookup_data=NULL,is.circular=FALSE,model=0){
         dat.new[,this.d := abs(mids[j]-mids[i])]
     }
     if(model==0){
-#        dat.new = dat.new[!is.na(this.interaction)]
-#        dat.new[,this.interaction:=ifelse(gr[i]$compartment==gr[j]$compartment,'same','diff')]
-#        dat.new[,this.interaction:=ifelse((is.na(gr[i]$compartment) | is.na(gr[j]$compartment)),NA,this.interaction)]
         min.res = min(lookup_data[d>0]$d)
         max.res = 1e8
         inds = (dat.new$this.d < max.res) & (dat.new$this.d >= min.res) & !(is.na(dat.new$this.interaction))
@@ -229,15 +185,13 @@ inter_allele <- function(rebinned_dats,tiled.target,input_walks,lookup_data,temp
         }
         mydat = data.table::copy(template)
         mydat[,cnprod1:=(my.gr[i]$my.cn)*(my.gr[j]$other.cn)]
-#        mydat[,cnprod2:=(my.gr[j]$my.cn)*(my.gr[i]$other.cn)]
-        mydat[,cnprod:= ((cnprod1 %>% replace(is.na(.),0)))]# + (cnprod2 %>% replace(is.na(.),0)))]
+        mydat[,cnprod:= ((cnprod1 %>% replace(is.na(.),0)))]
         mydat[,value:=walk.cn*raw_density*cnprod*widthprod]
         mydat[is.na(value),value:=0]
         # subtract CN of myself from the overall CN from jabba
         # then the number of counts for contact i-j is:
             # cts = (CN of i inside myself)*(CN of j in everyone else)*(p from the lookup table(AA/AB/BB))*(binwidth^2) 
         # add the interchromosomal gmat to my self-contact gmat
-#        my.interchr.contacts = gM(gr=all.gr,dat=mydat)
         combdat = merge.data.table(mydat[,.(inter_value=value,id)],rebinned_dats[[x]][,.(i,j,intra_value=value,id)],by='id')[,value:=intra_value+inter_value]
         out.dat = combdat[,.(i,j,id,value)]
         return(out.dat)
@@ -321,58 +275,12 @@ compdats <- function(dat_test,dat_true,theta=0,ifscale=FALSE,ifsum=TRUE,checkind
     }
 }
 
-compmaps <- function(map_test,map_true,theta=0,ifsum=FALSE,ifscale = FALSE,if.diag=TRUE){ 
-    #returns the negative log likelihood of test map given true map and negative-binomial noise
-    template = make_template_dat(map_true$gr)
-    dat_test = merge.data.table(template[,.(i,j,id)],map_test$dat[,.(i,j,value)],all.x=TRUE,by=c('i','j'))
-    dat_true = merge.data.table(template[,.(i,j,id)],map_true$dat[,.(i,j,value)],all.x=TRUE,by=c('i','j'))
-    dat_test[is.na(value),value:=0]
-    dat_true[is.na(value),value:=0]
-    comp_dat = compdats(dat_test,dat_true,theta,ifscale,ifsum=FALSE,if.diag=if.diag)
-    if (ifsum){
-        return(sum(comp_dat$value))
-    }else{
-        return(gM(gr=map_true$gr,dat=comp_dat))
-    }
-}
-
-ensemble_compmaps <- function(map_test,map_true,n=100,theta=0,ifscale=FALSE,if.diag=TRUE,ifsum=FALSE,mc.cores=1){
-    gr_test = map_test$gr
-    dat_true = map_true$dat
-    test.ensemble = make_noisydat(map_test,num.copies=n,theta=theta)
-    comps = mclapply(test.ensemble,function(m){compdats(m,dat_true,theta,ifscale=ifscale,ifsum=ifsum,if.diag=if.diag)},mc.cores=mc.cores)
-    if(ifsum){
-        return(mean(unlist(comps)))
-    }else{
-        return(gM(gr=gr_test,dat=sum_matrices(comps))/n)
-    }
-}
-
-estimate.depthratio <- function(hic.data,res,ifplot=FALSE){ #put here hic data in a non-rearranged place. Estimates the depth ratio between this data and the reference data
-  lookup.data=readRDS('/gpfs/commons/home/ieshghi/Projects/contacts_sv_correction/data/10kb_lookupfile.rds') #this data is at 1500x
-  lookup.data = lookup.data[d>=res & d<=1e7]
-  lookup.data[,source:='gm12878']
-  reffit = lm(log10(tot_density)~log10(d),data=lookup.data)
-  dat = hic.data$dat[i!=j]
-  dat[,d:=res*(j-i)]
-  dat[,source:='skov3']
-  dat[,tot_density:=mean(value/res^2,na.rm=TRUE),by=d]
-  dat = unique(dat[d>=res & d<=1e7,.(d,tot_density,source)])
-  thisfit = lm(log10(tot_density)~log10(d),data=dat)
-  compdat = rbind(dat[,.(d,tot_density,source)],lookup.data[,.(d,tot_density,source)])
-  if (ifplot){
-    ppdf(plot(ggplot(compdat)+
-      geom_point(aes(x=d,y=tot_density,color=source))+
-      geom_line(aes(x=d,y=d^(reffit$coefficients[[2]])*10^reffit$coefficients[[1]]),linetype='dashed')+
-      geom_line(aes(x=d,y=d^(thisfit$coefficients[[2]])*10^thisfit$coefficients[[1]]),linetype='dashed')+
-      scale_x_log10()+scale_y_log10()))
+symmetrize <- function(b){
+    b[lower.tri(b)] = t(b)[lower.tri(b)]
+    return(b)
   }
-  #return(1500*10^(thisfit$coefficients[[1]]-reffit$coefficients[[1]]))
-  est2 = dat[d==1e5]$tot_density/mean(lookup.data[d==1e5]$tot_density)
-  return(est2)
-}
 
-make_compartment_reference <- function(tiling.res,runname, hic.file = '/gpfs/commons/groups/imielinski_lab/data/PoreC/Rao2014/4DNFI1UEG1HD.hic',comps.file = '~/Projects/contacts_sv_correction/data/gm12878_comps.rds',write.dir = '~/Projects/contacts_sv_correction/data/',ifplot=FALSE,if.iqr=FALSE){
+make_compartment_reference <- function(tiling.res,runname,hic.file,comps.file,write.dir,ifplot=FALSE,if.iqr=FALSE){
     #
     comps.gr = gr.nochr(readRDS(comps.file))
     #
