@@ -49,26 +49,12 @@ ensemble_compmaps <- function(map_test,map_true,n=100,theta=0,ifscale=FALSE,if.d
 }
 
 estimate.depthratio <- function(hic.data,res,ifplot=FALSE){ #put here hic data in a non-rearranged place. Estimates the depth ratio between this data and the reference data
-  lookup.data=readRDS('/gpfs/commons/home/ieshghi/Projects/contacts_sv_correction/data/10kb_lookupfile.rds') #this data is at 1500x
-  lookup.data = lookup.data[d>=res & d<=1e7]
-  lookup.data[,source:='gm12878']
-  reffit = lm(log10(tot_density)~log10(d),data=lookup.data)
+  lookup.data = fastKar::small_lookup
   dat = hic.data$dat[i!=j]
   dat[,d:=res*(j-i)]
   dat[,source:='skov3']
   dat[,tot_density:=mean(value/res^2,na.rm=TRUE),by=d]
   dat = unique(dat[d>=res & d<=1e7,.(d,tot_density,source)])
-  thisfit = lm(log10(tot_density)~log10(d),data=dat)
-  compdat = rbind(dat[,.(d,tot_density,source)],lookup.data[,.(d,tot_density,source)])
-  if (ifplot){
-    ppdf(plot(ggplot(compdat)+
-      geom_point(aes(x=d,y=tot_density,color=source))+
-      geom_line(aes(x=d,y=d^(reffit$coefficients[[2]])*10^reffit$coefficients[[1]]),linetype='dashed')+
-      geom_line(aes(x=d,y=d^(thisfit$coefficients[[2]])*10^thisfit$coefficients[[1]]),linetype='dashed')+
-      scale_x_log10()+scale_y_log10()))
-  }
-  est2 = dat[d==1e5]$tot_density/mean(lookup.data[d==1e5]$tot_density)
-  return(est2)
+  est = dat[d==1e5]$tot_density/mean(lookup.data[d==1e5]$tot_density)
+  return(est)
 }
-
-

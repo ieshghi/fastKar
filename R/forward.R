@@ -1,11 +1,10 @@
 # In this file I define some functions used in the prediction of 3D structure at rearrangements.
-
 run_analysis <- function(walks,target_region=NULL,if.comps=FALSE,pix.size=1e5,mc.cores=20,verbose=FALSE,if.sum=TRUE,depth=1,model=0){
-    lookup_data = medium_lookup
+    lookup_data = fastKar::medium_lookup
     if (pix.size==1e4){
-        lookup_data = small_lookup 
+        lookup_data = fastKar::small_lookup 
     }else if(pix.size==1e6){
-        lookup_data = big_lookup 
+        lookup_data = fastKar::big_lookup 
     }
     lookup_data = readRDS(lookup_path)
     keep.seqs = si2gr(seqlengths(walks)[names(seqlengths(walks)) %in% c(1:22,'X','Y')])
@@ -21,7 +20,7 @@ run_analysis <- function(walks,target_region=NULL,if.comps=FALSE,pix.size=1e5,mc
     }else if(if.comps=='rand'){
         comps.gr = 'rand'
     }else{
-        comps.gr = suppressWarnings(gr.fix(gr.nochr(compartment_lookup),keep.seqs,drop=TRUE))
+        comps.gr = suppressWarnings(gr.fix(gr.nochr(fastKar::compartment_lookup),keep.seqs,drop=TRUE))
     }
     #
     target_region = gr.fix(target_region,keep.seqs,drop=TRUE)
@@ -207,6 +206,12 @@ sum_matrices <- function(matrices){
     allmats[,sumval:=sum(value),by='id']
     outmat = unique(allmats[,.(i,j,id,value = sumval)])
     return(outmat)
+}
+
+test_datatable <- function(x){
+    a = data.table(x)
+    a[,i:=x^2]
+    return(a$i)
 }
 
 make_template_dat <- function(target.bins){
