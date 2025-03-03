@@ -1,0 +1,21 @@
+Package: fastKar
+Title: Simulate rearranged karyotype Hi-C, fast!
+Version: 0.0.0.9000
+Authors@R: 
+    person("Iraj", "Eshghi", , "ieshghi@nygenome.org", role = c("aut", "cre"))
+Description: This package implements a probabilistic model of Hi-C data for highly rearranged genomes, using the gGnome framework developed by the Imielinski Lab. 
+License: `use_gpl3_license()`
+Encoding: UTF-8
+Roxygen: list(markdown = TRUE)
+RoxygenNote: 7.3.2
+
+Imports:
+	skitools
+	gTrack
+	gGnome
+	GxG
+	pracma
+	data.table
+	MASS
+	gUtils
+	ietools
