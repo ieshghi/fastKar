@@ -1,28 +1,75 @@
 # In this file I define some functions used in the prediction of 3D structure at rearrangements.
+
+#this branch will be for me to develop a version of the forward model which is tiling-ambiguous, with helper functions to re-do the tiling as in the old version
+
+simulate_tiled_walk <- function(walks,target_region=NULL,pix.size=1e5,if.comps=FALSE,mc.cores=1,if.sum=TRUE,depth=1,model=0){
+    #
+    if (is.null(target_region)){
+        target_region = walks$footprint
+    }
+    #
+    if (if.comps==FALSE){
+        comps.gr = NULL
+    }else if(if.comps=='rand'){
+        comps.gr = 'rand'
+    }else{
+        comps.gr = gr.nochr(fastKar::compartment_lookup)
+    }
+    #
+    input_walks = walks %&% target_region
+    walk.cn = input_walks$dt$cn
+    if(is.null(walk.cn)){
+        walk.cn = rep(1,length(input_walks))
+        input_walks$set(cn=walk.cn)
+    }
+    circulars = input_walks$circular
+    nw = length(input_walks)
+    #
+    tiled.target = eval_comps(gr.tile(target_region,pix.size),comps.gr)
+    #
+    tiled.walks = mclapply(input_walks$grl,function(walk){
+        toflip = which(as.character(strand(walk))=='-')
+        merwalk = gr.merge(walk,tiled.target[,c()]) #merge it with the target bins so edges all match
+        strand(merwalk) = strand(walk[merwalk$query.id])
+        inds = sort(merwalk$query.id,index.return=TRUE)
+        merwalk.st = merwalk[inds$ix]
+        tile.walk = gr.tile(merwalk.st,pix.size) #tile with pix.size bins
+        tile.walk$orig.id = merwalk.st[tile.walk$query.id]$subject.id #which tile in the target region does this tile map to?
+        tile.walk$compartment = tiled.target[tile.walk$orig.id]$compartment
+
+        #the steps that are on negative strand need to be flipped
+        tile.walk$step.id = merwalk.st[tile.walk$query.id]$query.id #the ID of the "original" bin inside "merwalk" which this bin was taken from
+        id.dt = data.table(step = tile.walk$step.id , tile = tile.walk$tile.id,compartment = tile.walk$compartment,orig.id=tile.walk$orig.id)
+        id.dt[,new.id:=tile]
+        id.dt[step %in% toflip,new.id:=rev(tile),by=step]
+        id.dt[,tile.id:=new.id]
+        return(id.dt[,.(tile.id,orig.id,compartment)])
+    },mc.cores=mc.cores)
+
+
+}
+
+simulate_walks <- function(walks,target_region,pix.size=1e4,mc.cores=1,verbose=FALSE,if.sum=TRUE,depth=1,model=0){
+}
+
 run_analysis <- function(walks,target_region=NULL,if.comps=FALSE,pix.size=1e5,mc.cores=20,verbose=FALSE,if.sum=TRUE,depth=1,model=0){
-    #browser()
     lookup_data = fastKar::medium_lookup
     if (pix.size==1e4){
         lookup_data = fastKar::small_lookup 
     }else if(pix.size==1e6){
         lookup_data = fastKar::big_lookup 
     }
-    keep.seqs = si2gr(seqlengths(walks)[names(seqlengths(walks)) %in% c(1:22,'X','Y')])
-        #
     if (is.null(target_region)){
         target_region = walks$footprint
     }
     #
-    if(verbose){message('Loading compartment data to walks')}
     if (if.comps==FALSE){
         comps.gr = NULL
     }else if(if.comps=='rand'){
         comps.gr = 'rand'
     }else{
-        comps.gr = suppressWarnings(gr.fix(gr.nochr(fastKar::compartment_lookup),keep.seqs,drop=TRUE))
+        comps.gr = gr.nochr(fastKar::compartment_lookup)
     }
-    #
-    target_region = gr.fix(target_region,keep.seqs,drop=TRUE)
     input_walks = walks %&% target_region
     walk.cn = input_walks$dt$cn
     if(is.null(walk.cn)){
@@ -38,6 +85,7 @@ run_analysis <- function(walks,target_region=NULL,if.comps=FALSE,pix.size=1e5,mc
     if(verbose){message('Simulating contacts')}
     #
     sim.dats = mclapply(1:nw,function(ii){
+        ii = 1
         walk = input_walks$grl[[ii]][,c()] #take the ii'th input walk
         toflip = which(as.character(strand(walk))=='-')
         merwalk = gr.merge(walk,tiled.target[,c()]) #merge it with the target bins so edges all match
@@ -70,12 +118,13 @@ run_analysis <- function(walks,target_region=NULL,if.comps=FALSE,pix.size=1e5,mc
 
         if (nrow(local_sim$dat)){
             #
-            localmat = local_sim$mat %>% unname %>% as.matrix %>% symmetrize #convert to a matrix and symmetrize
+            localmat = local_sim$mat %>% unname %>% as.matrix 
+            localmat.symm = symmetrize(localmat)    #convert to a matrix and symmetrize
             #
-            refmat = (t(transfmat.spr) %*% localmat)%*%transfmat.spr #apply coordinate transformation 
+            refmat = (Matrix::t(transfmat.spr) %*% localmat.symm)%*%transfmat.spr #apply coordinate transformation 
             #
             tsparse.ref = as(refmat,'TsparseMatrix')
-            dt.ref = data.table(i=tsparse.ref@i+1,j=tsparse.ref@j+1,value=tsparse.ref@x)[i<=j]# change to long format
+            dt.ref = data.table(i=tsparse.ref@i+1,j=tsparse.ref@j+1,value=tsparse.ref@x)[i<=j]# change to long format, Tsparsematrix is 0-indexed
             out.dt = merge.data.table(data.table::copy(template.dat),dt.ref,all.x=TRUE,by=c('i','j'))[,.(i,j,id,value.y,value=value.x)] # merge with the template data table so the ID matches the relevant coordinates for future summation
             out.dt[!is.na(value.y),value:=value+value.y]
             out.dt = out.dt[,.(i,j,id,value)]
@@ -103,7 +152,6 @@ run_analysis <- function(walks,target_region=NULL,if.comps=FALSE,pix.size=1e5,mc
     }
     return(final_mat)
 }
-
 eval_comps <- function(tiled.walk,comps.gr=NULL){
     nbin = length(tiled.walk)
     if (is.null(comps.gr)){

@@ -1,7 +1,9 @@
 # this file contains some basic tests for the fastKar package
 
 test_fastKar_forward <- function(){
-    somewalks = makerepdup(1e5,'cis1')
+    tiles = gr.tile(parse.gr('1:1:1e6'),3e5)
+    nodeseq = c(1,2,-4,-3)
+    walk = makewalk(tiles,nodeseq)
     somewalks$dt[,cn:=1]
     gmats = run_analysis(somewalks,pix.size=1e4,mc.cores=3)
     return(gmats)
@@ -42,5 +44,27 @@ makerepdup <- function(regsize,geometry){
     walk$graph$nodes$mark(cn=1)
     walk$disjoin()
   }
+  return(walk)
+}
+
+makewalk <- function(tiles,nodewalk,background = FALSE){
+  segments = gG(nodes=tiles)$gr[,c()]
+  segments$node.id = 1:length(segments)
+  if (is.list(nodewalk)){
+    walk.gr = lapply(nodewalk,function(w){segments[w]})
+  }else{
+    walk.gr = segments[nodewalk]
+  }
+  if (background){
+    norm.gr = segments %Q% (strand=='+')
+    walk = gW(grl = GRangesList(walk.gr,norm.gr))
+    walk$set(cn=c(1,as.numeric(background)))
+  }else{
+    walk = gW(grl = GRangesList(walk.gr))
+    walk$set(cn=1)
+  }
+  walk$nodes$mark(cn=1)
+  walk$edges$mark(cn=1)
+  walk$disjoin()
   return(walk)
 }
