@@ -85,7 +85,6 @@ run_analysis <- function(walks,target_region=NULL,if.comps=FALSE,pix.size=1e5,mc
     if(verbose){message('Simulating contacts')}
     #
     sim.dats = mclapply(1:nw,function(ii){
-        ii = 1
         walk = input_walks$grl[[ii]][,c()] #take the ii'th input walk
         toflip = which(as.character(strand(walk))=='-')
         merwalk = gr.merge(walk,tiled.target[,c()]) #merge it with the target bins so edges all match
