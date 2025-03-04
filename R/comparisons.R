@@ -1,3 +1,32 @@
+f1score_comparemaps <- function(null_map,hyp_map,theta=3,significance = 0.05,return_samples=FALSE,ifplot=FALSE,labs=list('null','hyp')){
+  num_samples = 10/significance
+  samples = lapply(list(null_map,hyp_map),function(m){make_noisydat(m,num_samples,theta)}) #samples to classify}
+  likelihooddiff = lapply(samples,function(s){
+                   unlist(lapply(s,function(ss){
+                    return(compdats(ss,null_map$dat,theta)-compdats(ss,hyp_map$dat,theta))
+                    }))
+                   })
+  likcutoff = unname(quantile(likelihooddiff[[1]],1-significance)) #bootstrap likelihood ratio cutoff by sampling from the null
+  if(ifplot){
+    data = data.table(lambda = likelihooddiff[[1]],label=labs[[1]])
+    data = rbind(data,data.table(lambda = likelihooddiff[[2]],label=labs[[2]]))
+    ppdf(plot(ggplot(data)+
+      geom_histogram(aes(x=lambda,color=label),position='identity',alpha=0.4)+
+      geom_vline(xintercept=likcutoff,color='black',linetype='dashed')),width=5,height=4)
+  }
+  if (return_samples){
+    return(list(likelihooddiff[[1]],likelihooddiff[[2]],likcutoff))
+  }else{
+  reject_null = likelihooddiff[[2]] > likcutoff
+
+  tps = sum(reject_null==TRUE) #since hyp_samples are non-null, rejecting the null in those samples is a true positive
+  fns = sum(reject_null==FALSE) #for the same reason as above, keeping the null in those samples is a false negative
+  fps = significance*num_samples #by design, false positive rate is the significance level we choose times the number of samples
+  f1 = 2*tps/(2*tps + fps + fns)
+  return(f1)
+  }
+}
+
 test.walks.with.hic <- function(walkset,hic.data,resolution=1e5,mc.cores=1,return='scores'){
     if(!is.list(walkset)){
         stop('Give me multiple walks with the same footprint in a list to compare!')
