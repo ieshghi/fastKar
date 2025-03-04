@@ -1,4 +1,4 @@
-f1score_comparemaps <- function(null_map,hyp_map,theta=3,significance = 0.05,return_samples=FALSE,ifplot=FALSE,labs=list('null','hyp')){
+f1score_comparemaps <- function(null_map,hyp_map,theta=3,significance = 0.05,return_samples=FALSE){
   num_samples = 10/significance
   samples = lapply(list(null_map,hyp_map),function(m){make_noisydat(m,num_samples,theta)}) #samples to classify}
   likelihooddiff = lapply(samples,function(s){
@@ -7,13 +7,6 @@ f1score_comparemaps <- function(null_map,hyp_map,theta=3,significance = 0.05,ret
                     }))
                    })
   likcutoff = unname(quantile(likelihooddiff[[1]],1-significance)) #bootstrap likelihood ratio cutoff by sampling from the null
-  if(ifplot){
-    data = data.table(lambda = likelihooddiff[[1]],label=labs[[1]])
-    data = rbind(data,data.table(lambda = likelihooddiff[[2]],label=labs[[2]]))
-    ppdf(plot(ggplot(data)+
-      geom_histogram(aes(x=lambda,color=label),position='identity',alpha=0.4)+
-      geom_vline(xintercept=likcutoff,color='black',linetype='dashed')),width=5,height=4)
-  }
   if (return_samples){
     return(list(likelihooddiff[[1]],likelihooddiff[[2]],likcutoff))
   }else{
