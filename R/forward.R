@@ -1,5 +1,6 @@
 # In this file I define some functions used in the prediction of 3D structure at rearrangements.
 run_analysis <- function(walks,target_region=NULL,if.comps=FALSE,pix.size=1e5,mc.cores=20,verbose=FALSE,if.sum=TRUE,depth=1,model=0){
+    #browser()
     lookup_data = fastKar::medium_lookup
     if (pix.size==1e4){
         lookup_data = fastKar::small_lookup 
@@ -9,8 +10,7 @@ run_analysis <- function(walks,target_region=NULL,if.comps=FALSE,pix.size=1e5,mc
     keep.seqs = si2gr(seqlengths(walks)[names(seqlengths(walks)) %in% c(1:22,'X','Y')])
         #
     if (is.null(target_region)){
-        target_chroms = c(1:22,'X','Y')
-        target_region = si2gr(hg_seqlengths(chr=FALSE)) %Q% (seqnames %in% target_chroms)
+        target_region = walks$footprint
     }
     #
     if(verbose){message('Loading compartment data to walks')}
