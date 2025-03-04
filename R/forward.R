@@ -72,7 +72,7 @@ run_analysis <- function(walks,target_region=NULL,if.comps=FALSE,pix.size=1e5,mc
             #
             localmat = local_sim$mat %>% unname %>% as.matrix %>% symmetrize #convert to a matrix and symmetrize
             #
-            refmat = (t(transfmat.spr) %*% localmat)%*%transfmat.spr #apply coordinate transformation 
+            refmat = (Matrix::t(transfmat.spr) %*% localmat)%*%transfmat.spr #apply coordinate transformation 
             #
             tsparse.ref = as(refmat,'TsparseMatrix')
             dt.ref = data.table(i=tsparse.ref@i+1,j=tsparse.ref@j+1,value=tsparse.ref@x)[i<=j]# change to long format
