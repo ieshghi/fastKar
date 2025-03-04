@@ -2,7 +2,7 @@
 
 #this branch will be for me to develop a version of the forward model which is tiling-ambiguous, with helper functions to re-do the tiling as in the old version
 
-simulate_tiled_walk <- function(walks,target_region=NULL,pix.size=1e5,if.comps=FALSE,mc.cores=1,if.sum=TRUE,depth=1,model=0){
+tile_and_simulate <- function(walks,target_region=NULL,pix.size=1e5,if.comps=FALSE,mc.cores=1,if.sum=TRUE,depth=1,model=0){
     #
     if (is.null(target_region)){
         target_region = walks$footprint
@@ -46,10 +46,10 @@ simulate_tiled_walk <- function(walks,target_region=NULL,pix.size=1e5,if.comps=F
         return(id.dt[,.(tile.id,orig.id,compartment)])
     },mc.cores=mc.cores)
 
-
+    return(tiled.walks)
 }
 
-simulate_walks <- function(walks,target_region,pix.size=1e4,mc.cores=1,verbose=FALSE,if.sum=TRUE,depth=1,model=0){
+simulate_walks <- function(walk.dt,target_region,pix.size=1e4,mc.cores=1,verbose=FALSE,if.sum=TRUE,depth=1,model=0){
 }
 
 run_analysis <- function(walks,target_region=NULL,if.comps=FALSE,pix.size=1e5,mc.cores=20,verbose=FALSE,if.sum=TRUE,depth=1,model=0){
@@ -150,6 +150,7 @@ run_analysis <- function(walks,target_region=NULL,if.comps=FALSE,pix.size=1e5,mc
     }
     return(final_mat)
 }
+
 eval_comps <- function(tiled.walk,comps.gr=NULL){
     nbin = length(tiled.walk)
     if (is.null(comps.gr)){
@@ -259,14 +260,16 @@ test_datatable <- function(x){
     return(a$i)
 }
 
-make_template_dat <- function(target.bins){
+make_template_dat <- function(target.bins,if.comps=TRUE){
     widths = width(target.bins) %>% as.numeric
     template.dat = data.table(expand.grid(i=1:length(target.bins),j=1:length(target.bins)))[j>=i][,value:=0]
     setkeyv(template.dat,c('i','j'))
-    template.dat[,this.interaction:=paste0(target.bins[i]$compartment,target.bins[j]$compartment)]
-    template.dat[grepl('NA',this.interaction),this.interaction:=NA]
-    template.dat[this.interaction=='BA' | this.interaction=='AB',this.interaction:='diff']
-    template.dat[this.interaction=='AA' | this.interaction=='BB',this.interaction:='same']
+    if(if.comps){
+        template.dat[,this.interaction:=paste0(target.bins[i]$compartment,target.bins[j]$compartment)]
+        template.dat[grepl('NA',this.interaction),this.interaction:=NA]
+        template.dat[this.interaction=='BA' | this.interaction=='AB',this.interaction:='diff']
+        template.dat[this.interaction=='AA' | this.interaction=='BB',this.interaction:='same']
+    }
     template.dat[,widthprod:=widths[i]*widths[j]]
     template.dat[,id:=.I]
     return(template.dat)
@@ -297,33 +300,6 @@ make_noisydat <- function(map_in,num.copies=1,theta=0,backlambda = 0){ #samples 
     return(out.dats)
 }
 
-compdats <- function(dat_test,dat_true,theta=0,ifscale=FALSE,ifsum=TRUE,checkinds=TRUE,if.diag=TRUE){
-    if(checkinds){
-        setkeyv(dat_test,c('i','j'))
-        setkeyv(dat_true,c('i','j'))
-        dat_test[,id:=.I]
-        dat_true[,id:=.I]
-    }
-    if (ifscale){
-        dat_test_scale = (dat_test$value)*mean(dat_true$value,na.rm=TRUE)/mean(dat_test$value,na.rm=TRUE) #re-scale using means
-        dat_test$value = dat_test_scale
-    }
-    combdat = merge.data.table(dat_test[,.(i,j,id,value)],dat_true[,.(id,value)],by='id')
-    if(if.diag==FALSE){
-        combdat = combdat[i!=j]
-    }
-    if (theta>0){
-        combdat[,logprob:=dnbinom(round(value.x),mu = value.y,size = theta,log=TRUE)]
-    }else{
-        combdat[,logprob:=dpois(round(value.x),lambda = value.y,log=TRUE)]
-    }
-    combdat[value.y==0,logprob:=0]
-    if (ifsum==TRUE){
-        return(-sum(combdat$logprob,na.rm=TRUE))
-    }else{
-        return(combdat[,.(value=-logprob,i,j,id)])
-    }
-}
 
 symmetrize <- function(input.mat){
     output.mat = input.mat + t(input.mat)
