@@ -6,7 +6,6 @@ run_analysis <- function(walks,target_region=NULL,if.comps=FALSE,pix.size=1e5,mc
     }else if(pix.size==1e6){
         lookup_data = fastKar::big_lookup 
     }
-    lookup_data = readRDS(lookup_path)
     keep.seqs = si2gr(seqlengths(walks)[names(seqlengths(walks)) %in% c(1:22,'X','Y')])
         #
     if (is.null(target_region)){
