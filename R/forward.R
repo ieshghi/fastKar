@@ -279,10 +279,11 @@ compdats <- function(dat_test,dat_true,theta=0,ifscale=FALSE,ifsum=TRUE,checkind
     }
 }
 
-symmetrize <- function(b){
-    b[lower.tri(b)] = t(b)[lower.tri(b)]
-    return(b)
-  }
+symmetrize <- function(input.mat){
+    output.mat = input.mat + t(input.mat)
+    diag(output.mat) = diag(input.mat)
+    return(output.mat)
+}
 
 make_compartment_reference <- function(tiling.res,runname,hic.file,comps.file,write.dir,ifplot=FALSE,if.iqr=FALSE){
     #
