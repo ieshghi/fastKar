@@ -1,14 +1,50 @@
 # this file contains some basic tests for the fastKar package
 
 test_fastKar_forward <- function(){
-    tiles = gr.tile(parse.gr('1:1:1e6'),3e5)
-    nodeseq = c(1,2,-4,-3)
-    walk = makewalk(tiles,nodeseq)
-    somewalks$dt[,cn:=1]
-    gmats = run_analysis(somewalks,pix.size=1e4,mc.cores=3)
-    return(gmats)
+  somewalks = makerepdup(1e5,'cis1')
+  gmats = run_analysis(somewalks,pix.size=1e4,mc.cores=3)
+  return(gmats)
 }
 
+gimme_bfb <- function(w,n,cycles=5){
+  tiles = gr.tile(parse.gr('1'),w)[1:n]
+  return(makebfb(tiles,cycles=cycles)[1])
+}
+
+makebfb  <- function(segments,cycles=5,background=TRUE){
+  segs = gG(nodes=unique(gr.stripstrand(segments)))$gr[,c()]
+  segs$node.id = 1:(length(segs))
+  binids = (segs %Q% (strand=='+'))$node.id
+  #assume these are bins at the end of a chomosome
+  for(this.cycle in 1:cycles){
+    nbin = length(binids)
+    binlabels = 1:nbin
+    breakpt = sample(binlabels[2:(length(binlabels)-1)],1)
+    if (breakpt <= nbin/2){
+      keepbins = binlabels[binlabels>=breakpt]
+      right_seg = binids[keepbins]
+      left_seg = -rev(binids[keepbins])
+    }else{
+      keepbins = binlabels[binlabels<=breakpt]
+      left_seg = binids[keepbins]
+      right_seg = -rev(binids[keepbins])
+    }
+    binids = c(left_seg,right_seg)
+  }
+  walk.gr = segs[abs(binids)]
+  strand(walk.gr) = ifelse(sign(binids)>0,'+','-')
+  norm.gr = segs %Q% (strand=='+')
+  if(background){
+    nodewalk = gW(grl=GRangesList(walk.gr,norm.gr))
+  }else{
+    nodewalk = gW(grl=GRangesList(walk.gr))
+  }
+  nodewalk$set(cn=1)
+  nodewalk$nodes$mark(cn=1)
+  nodewalk$edges$mark(cn=1)
+  nodewalk$disjoin()
+  return(nodewalk)
+}
 # simple reciprocal dup
 makerepdup <- function(regsize,geometry){
   target_chroms = c(1,2)

@@ -1,7 +1,6 @@
 # In this file I define some functions used in the prediction of 3D structure at rearrangements.
 
 #this branch will be for me to develop a version of the forward model which is tiling-ambiguous, with helper functions to re-do the tiling as in the old version
-
 tile_and_simulate <- function(walks,target_region=NULL,pix.size=1e5,if.comps=FALSE,mc.cores=1,if.sum=TRUE,depth=1,model=0){
     #
     if (is.null(target_region)){
@@ -16,6 +15,7 @@ tile_and_simulate <- function(walks,target_region=NULL,pix.size=1e5,if.comps=FAL
         comps.gr = gr.nochr(fastKar::compartment_lookup)
     }
     #
+    input_graph = walks$graph %&% target_region
     input_walks = walks %&% target_region
     walk.cn = input_walks$dt$cn
     if(is.null(walk.cn)){
@@ -27,29 +27,60 @@ tile_and_simulate <- function(walks,target_region=NULL,pix.size=1e5,if.comps=FAL
     #
     tiled.target = eval_comps(gr.tile(target_region,pix.size),comps.gr)
     #
-    tiled.walks = mclapply(input_walks$grl,function(walk){
+    tiled.walks.dt = mclapply(input_walks$grl,function(walk){
         toflip = which(as.character(strand(walk))=='-')
         merwalk = gr.merge(walk,tiled.target[,c()]) #merge it with the target bins so edges all match
         strand(merwalk) = strand(walk[merwalk$query.id])
         inds = sort(merwalk$query.id,index.return=TRUE)
-        merwalk.st = merwalk[inds$ix]
-        tile.walk = gr.tile(merwalk.st,pix.size) #tile with pix.size bins
-        tile.walk$orig.id = merwalk.st[tile.walk$query.id]$subject.id #which tile in the target region does this tile map to?
-        tile.walk$compartment = tiled.target[tile.walk$orig.id]$compartment
+        merwalk.st = merwalk[inds$ix][,c('query.id','subject.id')]
+        merwalk.st$compartment = tiled.target[merwalk.st$subject.id]$compartment
 
-        #the steps that are on negative strand need to be flipped
-        tile.walk$step.id = merwalk.st[tile.walk$query.id]$query.id #the ID of the "original" bin inside "merwalk" which this bin was taken from
-        id.dt = data.table(step = tile.walk$step.id , tile = tile.walk$tile.id,compartment = tile.walk$compartment,orig.id=tile.walk$orig.id)
-        id.dt[,new.id:=tile]
-        id.dt[step %in% toflip,new.id:=rev(tile),by=step]
-        id.dt[,tile.id:=new.id]
-        return(id.dt[,.(tile.id,orig.id,compartment)])
+        id.dt = gr2dt(merwalk.st)
+        id.dt[query.id %in% toflip,subject.id:=rev(subject.id),by=query.id]
+        setkeyv(id.dt,'query.id')
+        return(id.dt[,.(width,tile.id=.I,orig.id=subject.id,compartment)])
     },mc.cores=mc.cores)
-
-    return(tiled.walks)
+    return(tiled.walks.dt)
 }
 
-simulate_walks <- function(walk.dt,target_region,pix.size=1e4,mc.cores=1,verbose=FALSE,if.sum=TRUE,depth=1,model=0){
+split_and_simulate <- function(walks,target_region=NULL)
+
+simulate_walks_dt <- function(walk.dt,target_region,if.comps=FALSE,pix.size=1e4,mc.cores=1,verbose=FALSE,if.sum=TRUE,depth=1,model=0){
+    #each element of walk.dt has four columns:
+    # width (width of the tile)
+    # tile.id (order tiles appear in the walk),
+    # orig.id (id of tile in the target region),
+    # and compartment
+
+    template.dat = make_template_dat(tiled.target,if.comps=if.comps) #useful to make a data.table for all the gMatrices going forward, this is defined on the tiling of the target so that we know exactly what the outputs will look like. Using a single "ID" column to refer to the pixels accelerates summation further on.
+
+    reference.walkdts = mclapply(walk.dts,function(walk.dt){
+        this.dt = copy(walk.dt) 
+        this.dt[,end:=cumsum(width)] #end coordinates along the allele are just the sum of widths
+        this.dt[,start:=newends - width + 1] #start coordinates are the ends minus widths
+        #
+        transfmat.spr = sparseMatrix(i=this.dt$tile.id,j=this.dt$orig.id,x=1,dims=c(nrow(this.dt),nrow(this.dt))) #this sparse matrix gives us the lift back to reference. Since all bins in liftedwalk are subsets of bins in merwalk, this is just a matrix of ones, but each bin in merwalk can have multiple bins in liftedwalk point to it, so each column can have multiple 1s in it.
+        #
+        local_sim = simulate_hic_dt(this.dt,lookup_data,circulars[ii],model=model) #run the simulator, get a gMatrix in local coordinates
+
+        if (nrow(local_sim$dat)){
+            #
+            localmat = local_sim$mat %>% unname %>% as.matrix %>% symmetrize #convert to a matrix and symmetrize
+            #
+            refmat = (Matrix::t(transfmat.spr) %*% localmat)%*%transfmat.spr #apply coordinate transformation 
+            #
+            tsparse.ref = as(refmat,'TsparseMatrix')
+            dt.ref = data.table(i=tsparse.ref@i+1,j=tsparse.ref@j+1,value=tsparse.ref@x)[i<=j]# change to long format, Tsparsematrix is 0-indexed
+            out.dt = merge.data.table(data.table::copy(template.dat),dt.ref,all.x=TRUE,by=c('i','j'))[,.(i,j,id,value.y,value=value.x)] # merge with the template data table so the ID matches the relevant coordinates for future summation
+            out.dt[!is.na(value.y),value:=value+value.y]
+            out.dt = out.dt[,.(i,j,id,value)]
+        }else{
+            out.dt = data.table::copy(template.dat[,.(i,j,id,value)])
+        }
+        return(out.dt[,value:=walk.cn[ii]*value])
+        #
+    },mc.cores=mc.cores)
+ 
 }
 
 run_analysis <- function(walks,target_region=NULL,if.comps=FALSE,pix.size=1e5,mc.cores=20,verbose=FALSE,if.sum=TRUE,depth=1,model=0){
@@ -110,6 +141,7 @@ run_analysis <- function(walks,target_region=NULL,if.comps=FALSE,pix.size=1e5,mc
         liftedwalk$compartment = tile.walk$compartment #load compartments
         liftedwalk$orig.id = tile.walk$orig.id
         liftedwalk$tile.id = tile.walk$tile.id #the ID of the bin in its own coordinates
+        browser()
         #
         transfmat.spr = sparseMatrix(i=liftedwalk$tile.id,j=liftedwalk$orig.id,x=1,dims=c(length(liftedwalk),length(tiled.target))) #this sparse matrix gives us the lift back to reference. Since all bins in liftedwalk are subsets of bins in merwalk, this is just a matrix of ones, but each bin in merwalk can have multiple bins in liftedwalk point to it, so each column can have multiple 1s in it.
         #
@@ -254,12 +286,6 @@ sum_matrices <- function(matrices){
     return(outmat)
 }
 
-test_datatable <- function(x){
-    a = data.table(x)
-    a[,i:=x^2]
-    return(a$i)
-}
-
 make_template_dat <- function(target.bins,if.comps=TRUE){
     widths = width(target.bins) %>% as.numeric
     template.dat = data.table(expand.grid(i=1:length(target.bins),j=1:length(target.bins)))[j>=i][,value:=0]
@@ -299,7 +325,6 @@ make_noisydat <- function(map_in,num.copies=1,theta=0,backlambda = 0){ #samples 
     #out.gms = lapply(out.dats,function(i){gM(gr=map_in$gr,dat=i)})
     return(out.dats)
 }
-
 
 symmetrize <- function(input.mat){
     output.mat = input.mat + t(input.mat)
