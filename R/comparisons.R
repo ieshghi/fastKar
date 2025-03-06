@@ -20,15 +20,17 @@ f1score_comparemaps <- function(null_map,hyp_map,theta=3,significance = 0.05,ret
   }
 }
 
-test.walks.with.hic <- function(walkset,hic.data,resolution=1e5,mc.cores=1,return='scores'){
+test.walks.with.hic <- function(walkset,hic.data,resolution=1e5,mc.cores=1,target_region=NULL,return='scores'){
     if(!is.list(walkset)){
         stop('Give me multiple walks with the same footprint in a list to compare!')
     }
-    firstwalk = walkset[[1]]
-    target=firstwalk$footprint
+    if(is.null(target_region)) {
+        firstwalk = walkset[[1]]
+        target_region=firstwalk$footprint
+    }
     depth.est = estimate.depthratio(hic.data,resolution)
     predictions = mclapply(walkset,function(w){
-        return(run_analysis(w,target_region=target,if.comps=F,pix.size=resolution,mc.cores=1,verbose=F,if.sum=T,depth=depth.est,model=0))
+        return(run_analysis(w,target_region=target_region,if.comps=F,pix.size=resolution,mc.cores=1,verbose=F,if.sum=T,depth=depth.est,model=0))
     },mc.cores=mc.cores)
     rebin.data = (hic.data$disjoin(predictions[[1]]$gr))$agg(predictions[[1]]$gr) #make sure data is aggregated on the same GRanges as the predictions
 
@@ -40,6 +42,13 @@ test.walks.with.hic <- function(walkset,hic.data,resolution=1e5,mc.cores=1,retur
         return(scoremaps)
     } else if (return=='predictions'){
         return(predictions)
+    } else if (return == 'sp') {
+        scores = mclapply(predictions,function(pred){compmaps(pred,rebin.data,ifsum=TRUE,theta=3)},mc.cores=mc.cores)
+        return(list(scores = scores, predictions = predictions))
+    } else if (return == 'all') {
+        scores = mclapply(predictions,function(pred){compmaps(pred,rebin.data,ifsum=TRUE,theta=3)},mc.cores=mc.cores)
+        scoremaps = mclapply(predictions,function(pred){compmaps(pred,rebin.data,ifsum=FALSE,theta=3)},mc.cores=mc.cores)
+        return(list(scores = scores, predictions = predictions, scoremaps = scoremaps, hic.data = rebin.data))
     }
 }
 
