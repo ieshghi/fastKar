@@ -87,6 +87,44 @@ simulate_walks_dt <- function(walk.dt,target_region,if.comps=FALSE,pix.size=1e4,
  
 }
 
+simulate_hic_dt  <-  function(walk.dt,lookup_data,template.dat=NULL,is.circular=FALSE,model=0){
+    nbin = nrow(walk.dt)
+    if (is.null(template.dat)){
+        dat.new = make_template_dat(gr)
+    } else {
+        dat.new = data.table::copy(template_dat)
+    }
+    if (is.circular){
+        totl = ends[nbin]
+        dat.new[,dist1:= abs(mids[j]-mids[i])]
+        dat.new[,this.d:=pmin(dist1,totl-dist1)][,dist1:=NULL]
+    }else{
+        dat.new[,this.d := abs(mids[j]-mids[i])]
+    }
+    if(model==0){
+        min.res = min(lookup_data[d>0]$d)
+        max.res = 1e8
+        inds = (dat.new$this.d < max.res) & (dat.new$this.d >= min.res) & !(is.na(dat.new$this.interaction))
+        if (sum(inds) > 0){
+            dat.new[inds,density:=interp1(x=lookup_data[d>=0 & interaction==this.interaction]$d,y=lookup_data[d>=0 & interaction==this.interaction]$tot_density,xi=this.d),by=c('this.interaction')] 
+        }
+        dat.new[this.d < min.res,density:=lookup_data[d==0]$tot_density]
+        same.minval = min(lookup_data[interaction=='same' & d>0 & d <=max.res]$tot_density)
+        diff.minval = min(lookup_data[interaction=='diff' & d>0 & d <=max.res]$tot_density)
+        dat.new[this.d >= max.res & this.interaction=='same',density:=(same.minval*max.res/this.d)]        
+        dat.new[this.d >= max.res & this.interaction=='diff',density:=(diff.minval*max.res/this.d)]        
+   }else {
+        min.res = min(lookup_data[d>0]$d)
+        dat.new[,density:=1500/(10*min.res^2)*(exp(-this.d/model))]
+        #some analytical model for short/long reads with readlength as an input parameter
+        #return what the data would be at 1500x depth, adjust accordingly
+   }
+   dat.new[,value:=density*widthprod]
+   dat.new[is.na(value),value:=0]
+   gr$tile.id = 1:length(gr)
+   return(gM(gr = gr,dat = dat.new[,.(i,j,value,id)]))
+}
+
 run_analysis <- function(walks,target_region=NULL,if.comps=FALSE,pix.size=1e5,mc.cores=20,verbose=FALSE,if.sum=TRUE,depth=1,model=0){
     lookup_data = fastKar::medium_lookup
     if (pix.size==1e4){
@@ -204,43 +242,6 @@ eval_comps <- function(tiled.walk,comps.gr=NULL){
     return(tiled.walk)
 }
 
-simulate_hic_dt  <-  function(gr,lookup_data,is.circular=FALSE,model=0){
-    grdt = gr2dt(gr)
-    widths = grdt$width
-    ends = grdt$end
-    mids = gr%>%mid
-    nbin =  length(gr)
-    dat.new = make_template_dat(gr)
-    if (is.circular){
-        totl = ends[nbin]
-        dat.new[,dist1:= abs(mids[j]-mids[i])]
-        dat.new[,this.d:=pmin(dist1,totl-dist1)][,dist1:=NULL]
-    }else{
-        dat.new[,this.d := abs(mids[j]-mids[i])]
-    }
-    if(model==0){
-        min.res = min(lookup_data[d>0]$d)
-        max.res = 1e8
-        inds = (dat.new$this.d < max.res) & (dat.new$this.d >= min.res) & !(is.na(dat.new$this.interaction))
-        if (sum(inds) > 0){
-            dat.new[inds,density:=interp1(x=lookup_data[d>=0 & interaction==this.interaction]$d,y=lookup_data[d>=0 & interaction==this.interaction]$tot_density,xi=this.d),by=c('this.interaction')] 
-        }
-        dat.new[this.d < min.res,density:=lookup_data[d==0]$tot_density]
-        same.minval = min(lookup_data[interaction=='same' & d>0 & d <=max.res]$tot_density)
-        diff.minval = min(lookup_data[interaction=='diff' & d>0 & d <=max.res]$tot_density)
-        dat.new[this.d >= max.res & this.interaction=='same',density:=(same.minval*max.res/this.d)]        
-        dat.new[this.d >= max.res & this.interaction=='diff',density:=(diff.minval*max.res/this.d)]        
-   }else {
-        min.res = min(lookup_data[d>0]$d)
-        dat.new[,density:=1500/(10*min.res^2)*(exp(-this.d/model))]
-        #some analytical model for short/long reads with readlength as an input parameter
-        #return what the data would be at 1500x depth, adjust accordingly
-   }
-   dat.new[,value:=density*widthprod]
-   dat.new[is.na(value),value:=0]
-   gr$tile.id = 1:length(gr)
-   return(gM(gr = gr,dat = dat.new[,.(i,j,value,id)]))
-}
 simulate_hic  <-  function(gr,lookup_data,is.circular=FALSE,model=0){
     grdt = gr2dt(gr)
     widths = grdt$width
@@ -328,14 +329,21 @@ sum_matrices <- function(matrices){
 }
 
 make_template_dat <- function(target.bins,if.comps=TRUE){
-    widths = width(target.bins) %>% as.numeric
-    template.dat = data.table(expand.grid(i=1:length(target.bins),j=1:length(target.bins)))[j>=i][,value:=0]
+    if(inherits(target.bins,'GRanges')){
+        widths = width(target.bins) %>% as.numeric
+    }else if(inherits(target.bins,'data.table')){
+        widths = target.bins$width
+    }
+    l = length(target.bins)
+    template.dat <- rbind(as.data.table(t(combn(l,2)))[,.(i=V1,j=V2)],data.table(i=1:l,j=1:l))[,value:=0]
     setkeyv(template.dat,c('i','j'))
     if(if.comps){
         template.dat[,this.interaction:=paste0(target.bins[i]$compartment,target.bins[j]$compartment)]
         template.dat[grepl('NA',this.interaction),this.interaction:=NA]
         template.dat[this.interaction=='BA' | this.interaction=='AB',this.interaction:='diff']
         template.dat[this.interaction=='AA' | this.interaction=='BB',this.interaction:='same']
+    } else {
+        template.dat[,this.interaction:='same']
     }
     template.dat[,widthprod:=widths[i]*widths[j]]
     template.dat[,id:=.I]
@@ -364,7 +372,8 @@ make_noisydat <- function(map_in,num.copies=1,theta=0,backlambda = 0){ #samples 
     multimap$value = newval
     out.dats = split(multimap,by='map.ids')
     #out.gms = lapply(out.dats,function(i){gM(gr=map_in$gr,dat=i)})
-    return(out.dats)
+    return(out.dats)bdat[,.(value=-logprob,i,j,id)])
+    }
 }
 
 symmetrize <- function(input.mat){
