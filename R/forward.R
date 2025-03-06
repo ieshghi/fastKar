@@ -372,7 +372,8 @@ make_noisydat <- function(map_in,num.copies=1,theta=0,backlambda = 0){ #samples 
     multimap$value = newval
     out.dats = split(multimap,by='map.ids')
     #out.gms = lapply(out.dats,function(i){gM(gr=map_in$gr,dat=i)})
-    return(out.dats)
+    return(out.dats)bdat[,.(value=-logprob,i,j,id)])
+    }
 }
 
 
