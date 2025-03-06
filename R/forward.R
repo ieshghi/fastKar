@@ -1,7 +1,7 @@
 # In this file I define some functions used in the prediction of 3D structure at rearrangements.
 
 #this branch will be for me to develop a version of the forward model which is tiling-ambiguous, with helper functions to re-do the tiling as in the old version
-tile_and_simulate <- function(walks,target_region=NULL,pix.size=1e5,if.comps=FALSE,mc.cores=1,if.sum=TRUE,depth=1,model=0){
+tile_and_prep <- function(walks,target_region=NULL,pix.size=1e5,if.comps=FALSE,mc.cores=1,if.sum=TRUE,depth=1,model=0){
     #
     if (is.null(target_region)){
         target_region = walks$footprint
@@ -22,10 +22,14 @@ tile_and_simulate <- function(walks,target_region=NULL,pix.size=1e5,if.comps=FAL
         walk.cn = rep(1,length(input_walks))
         input_walks$set(cn=walk.cn)
     }
-    circulars = input_walks$circular
     nw = length(input_walks)
     #
-    tiled.target = eval_comps(gr.tile(target_region,pix.size),comps.gr)
+    if is.null(comps.gr){
+        tiled.target = eval_comps(gr.tile(target_region,pix.size),comps.gr)
+        tiled.target$compartment = 'A'
+    } else {
+        tiled.target = eval_comps(gr.tile(target_region,pix.size),comps.gr)
+    }
     #
     tiled.walks.dt = mclapply(input_walks$grl,function(walk){
         toflip = which(as.character(strand(walk))=='-')
@@ -40,10 +44,10 @@ tile_and_simulate <- function(walks,target_region=NULL,pix.size=1e5,if.comps=FAL
         setkeyv(id.dt,'query.id')
         return(id.dt[,.(width,tile.id=.I,orig.id=subject.id,compartment)])
     },mc.cores=mc.cores)
-    return(tiled.walks.dt)
+    return(list(walkdt=tiled.walks.dt,circular=input_walks$circulars,target=tiled.target,gg=input_graph))
 }
 
-split_and_simulate <- function(walks,target_region=NULL)
+split_and_prep<- function(walks,target_region=NULL){}
 
 simulate_walks_dt <- function(walk.dt,target_region,if.comps=FALSE,pix.size=1e4,mc.cores=1,verbose=FALSE,if.sum=TRUE,depth=1,model=0){
     #each element of walk.dt has four columns:
@@ -200,6 +204,43 @@ eval_comps <- function(tiled.walk,comps.gr=NULL){
     return(tiled.walk)
 }
 
+simulate_hic_dt  <-  function(gr,lookup_data,is.circular=FALSE,model=0){
+    grdt = gr2dt(gr)
+    widths = grdt$width
+    ends = grdt$end
+    mids = gr%>%mid
+    nbin =  length(gr)
+    dat.new = make_template_dat(gr)
+    if (is.circular){
+        totl = ends[nbin]
+        dat.new[,dist1:= abs(mids[j]-mids[i])]
+        dat.new[,this.d:=pmin(dist1,totl-dist1)][,dist1:=NULL]
+    }else{
+        dat.new[,this.d := abs(mids[j]-mids[i])]
+    }
+    if(model==0){
+        min.res = min(lookup_data[d>0]$d)
+        max.res = 1e8
+        inds = (dat.new$this.d < max.res) & (dat.new$this.d >= min.res) & !(is.na(dat.new$this.interaction))
+        if (sum(inds) > 0){
+            dat.new[inds,density:=interp1(x=lookup_data[d>=0 & interaction==this.interaction]$d,y=lookup_data[d>=0 & interaction==this.interaction]$tot_density,xi=this.d),by=c('this.interaction')] 
+        }
+        dat.new[this.d < min.res,density:=lookup_data[d==0]$tot_density]
+        same.minval = min(lookup_data[interaction=='same' & d>0 & d <=max.res]$tot_density)
+        diff.minval = min(lookup_data[interaction=='diff' & d>0 & d <=max.res]$tot_density)
+        dat.new[this.d >= max.res & this.interaction=='same',density:=(same.minval*max.res/this.d)]        
+        dat.new[this.d >= max.res & this.interaction=='diff',density:=(diff.minval*max.res/this.d)]        
+   }else {
+        min.res = min(lookup_data[d>0]$d)
+        dat.new[,density:=1500/(10*min.res^2)*(exp(-this.d/model))]
+        #some analytical model for short/long reads with readlength as an input parameter
+        #return what the data would be at 1500x depth, adjust accordingly
+   }
+   dat.new[,value:=density*widthprod]
+   dat.new[is.na(value),value:=0]
+   gr$tile.id = 1:length(gr)
+   return(gM(gr = gr,dat = dat.new[,.(i,j,value,id)]))
+}
 simulate_hic  <-  function(gr,lookup_data,is.circular=FALSE,model=0){
     grdt = gr2dt(gr)
     widths = grdt$width
