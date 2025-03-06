@@ -40,6 +40,13 @@ test.walks.with.hic <- function(walkset,hic.data,resolution=1e5,mc.cores=1,retur
         return(scoremaps)
     } else if (return=='predictions'){
         return(predictions)
+    } else if (return == 'sp') {
+        scores = mclapply(predictions,function(pred){compmaps(pred,rebin.data,ifsum=TRUE,theta=3)},mc.cores=mc.cores)
+        return(list(scores = scores, predictions = predictions))
+    } else if (return == 'all') {
+        scores = mclapply(predictions,function(pred){compmaps(pred,rebin.data,ifsum=TRUE,theta=3)},mc.cores=mc.cores)
+        scoremaps = mclapply(predictions,function(pred){compmaps(pred,rebin.data,ifsum=FALSE,theta=3)},mc.cores=mc.cores)
+        return(list(scores = scores, predictions = predictions, scoremaps = scoremaps))
     }
 }
 
