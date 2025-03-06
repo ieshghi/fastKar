@@ -297,33 +297,6 @@ make_noisydat <- function(map_in,num.copies=1,theta=0,backlambda = 0){ #samples 
     return(out.dats)
 }
 
-compdats <- function(dat_test,dat_true,theta=0,ifscale=FALSE,ifsum=TRUE,checkinds=TRUE,if.diag=TRUE){
-    if(checkinds){
-        setkeyv(dat_test,c('i','j'))
-        setkeyv(dat_true,c('i','j'))
-        dat_test[,id:=.I]
-        dat_true[,id:=.I]
-    }
-    if (ifscale){
-        dat_test_scale = (dat_test$value)*mean(dat_true$value,na.rm=TRUE)/mean(dat_test$value,na.rm=TRUE) #re-scale using means
-        dat_test$value = dat_test_scale
-    }
-    combdat = merge.data.table(dat_test[,.(i,j,id,value)],dat_true[,.(id,value)],by='id')
-    if(if.diag==FALSE){
-        combdat = combdat[i!=j]
-    }
-    if (theta>0){
-        combdat[,logprob:=dnbinom(round(value.x),mu = value.y,size = theta,log=TRUE)]
-    }else{
-        combdat[,logprob:=dpois(round(value.x),lambda = value.y,log=TRUE)]
-    }
-    combdat[value.y==0,logprob:=0]
-    if (ifsum==TRUE){
-        return(-sum(combdat$logprob,na.rm=TRUE))
-    }else{
-        return(combdat[,.(value=-logprob,i,j,id)])
-    }
-}
 
 symmetrize <- function(input.mat){
     output.mat = input.mat + t(input.mat)
