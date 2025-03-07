@@ -196,7 +196,9 @@ cppFunction('List traverse_graph_cpp(DataFrame A, NumericVector loose_ends) {
     }
     
     // Add the completed path
-    traversed_paths.push_back(nodepath);
+    if(nodepath.size()>0){
+        traversed_paths.push_back(nodepath);
+    }
     
     // Update unvisited loose ends
     remaining_loose_ends.clear();

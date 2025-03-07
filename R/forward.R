@@ -24,7 +24,7 @@ tile_and_prep <- function(walks,target_region=NULL,pix.size=1e5,if.comps=FALSE,m
     }
     nw = length(input_walks)
     #
-    if is.null(comps.gr){
+    if (is.null(comps.gr)){
         tiled.target = eval_comps(gr.tile(target_region,pix.size),comps.gr)
         tiled.target$compartment = 'A'
     } else {
@@ -84,18 +84,13 @@ simulate_walks_dt <- function(walk.dt,target_region,if.comps=FALSE,pix.size=1e4,
         return(out.dt[,value:=walk.cn[ii]*value])
         #
     },mc.cores=mc.cores)
- 
+    return(reference.walkdts)
 }
 
-simulate_hic_dt  <-  function(walk.dt,lookup_data,template.dat=NULL,is.circular=FALSE,model=0){
-    nbin = nrow(walk.dt)
-    if (is.null(template.dat)){
-        dat.new = make_template_dat(gr)
-    } else {
-        dat.new = data.table::copy(template_dat)
-    }
+simulate_hic_dt  <-  function(walk.dt,lookup_data,is.circular=FALSE,model=0){
+    dat.new = make_template_dat(walk.dt)
     if (is.circular){
-        totl = ends[nbin]
+        totl = walk.dt$ends[nrow(walk.dt)]
         dat.new[,dist1:= abs(mids[j]-mids[i])]
         dat.new[,this.d:=pmin(dist1,totl-dist1)][,dist1:=NULL]
     }else{
@@ -121,8 +116,7 @@ simulate_hic_dt  <-  function(walk.dt,lookup_data,template.dat=NULL,is.circular=
    }
    dat.new[,value:=density*widthprod]
    dat.new[is.na(value),value:=0]
-   gr$tile.id = 1:length(gr)
-   return(gM(gr = gr,dat = dat.new[,.(i,j,value,id)]))
+   return(dat.new[,.(i,j,value,id)])
 }
 
 run_analysis <- function(walks,target_region=NULL,if.comps=FALSE,pix.size=1e5,mc.cores=20,verbose=FALSE,if.sum=TRUE,depth=1,model=0){
@@ -349,33 +343,6 @@ make_template_dat <- function(target.bins,if.comps=TRUE){
     template.dat[,id:=.I]
     return(template.dat)
 }
-
-make_noisymap <- function(map_in,theta=0,num.copies=1,mc.cores=20){
-    dats = make_noisydat(map_in,num.copies,theta)
-    out.maps = mclapply(dats,function(i){gM(gr=map_in$gr,dat=i)},mc.cores=mc.cores)
-    return(out.maps)
-}
-
-make_noisydat <- function(map_in,num.copies=1,theta=0,backlambda = 0){ #samples from negative binomial distribution, unless theta=0 then uses poisson
-    mapdat = map_in$dat
-    meanvals = mapdat$value
-    if (theta==0){
-        newval = rpois(length(meanvals)*num.copies,rep(meanvals,num.copies))
-    }else {
-        newval = rnbinom(length(meanvals)*num.copies,size=theta,mu=rep(meanvals,num.copies))
-    }
-    if (backlambda > 0){
-        newval = newval + rpois(length(newval),backlambda)
-    }
-    multimap = do.call(rbind,rep(list(mapdat),num.copies))
-    multimap$map.ids = lapply(1:num.copies,function(i){rep(i,nrow(mapdat))}) %>% unlist
-    multimap$value = newval
-    out.dats = split(multimap,by='map.ids')
-    #out.gms = lapply(out.dats,function(i){gM(gr=map_in$gr,dat=i)})
-    return(out.dats)bdat[,.(value=-logprob,i,j,id)])
-    }
-}
-
 
 symmetrize <- function(input.mat){
     output.mat = input.mat + t(input.mat)
