@@ -25,7 +25,7 @@ tile_and_prep <- function(walks,target_region=NULL,pix.size=1e5,if.comps=FALSE,m
     nw = length(input_walks)
     #
     if (is.null(comps.gr)){
-        tiled.target = eval_comps(gr.tile(target_region,pix.size),comps.gr)
+        tiled.target = gr.tile(target_region,pix.size)
         tiled.target$compartment = 'A'
     } else {
         tiled.target = eval_comps(gr.tile(target_region,pix.size),comps.gr)
@@ -49,23 +49,26 @@ tile_and_prep <- function(walks,target_region=NULL,pix.size=1e5,if.comps=FALSE,m
 
 split_and_prep<- function(walks,target_region=NULL){}
 
-simulate_walks_dt <- function(walk.dt,target_region,if.comps=FALSE,pix.size=1e4,mc.cores=1,verbose=FALSE,if.sum=TRUE,depth=1,model=0){
+simulate_walks_dt <- function(tiling.obj,if.comps=FALSE,mc.cores=1,if.sum=TRUE,depth=1,model=0){
+    #tiling obj is the output of the "tile_and_prep" or "split_and_prep" objects
     #each element of walk.dt has four columns:
     # width (width of the tile)
     # tile.id (order tiles appear in the walk),
     # orig.id (id of tile in the target region),
     # and compartment
-
-    template.dat = make_template_dat(tiled.target,if.comps=if.comps) #useful to make a data.table for all the gMatrices going forward, this is defined on the tiling of the target so that we know exactly what the outputs will look like. Using a single "ID" column to refer to the pixels accelerates summation further on.
+    tiled.target = tiling.obj$target
+    walkdt = tiling.obj$walkdt
+    target.dat = make_template_dat(tiled.target,if.comps=if.comps) #useful to make a data.table for all the gMatrices going forward, this is defined on the tiling of the target so that we know exactly what the outputs will look like. Using a single "ID" column to refer to the pixels accelerates summation further on.
 
     reference.walkdts = mclapply(walk.dts,function(walk.dt){
         this.dt = copy(walk.dt) 
         this.dt[,end:=cumsum(width)] #end coordinates along the allele are just the sum of widths
-        this.dt[,start:=newends - width + 1] #start coordinates are the ends minus widths
+        this.dt[,start:=end - width + 1] #start coordinates are the ends minus widths
+        this.dt[,mid:=(start+end)/2]
         #
         transfmat.spr = sparseMatrix(i=this.dt$tile.id,j=this.dt$orig.id,x=1,dims=c(nrow(this.dt),nrow(this.dt))) #this sparse matrix gives us the lift back to reference. Since all bins in liftedwalk are subsets of bins in merwalk, this is just a matrix of ones, but each bin in merwalk can have multiple bins in liftedwalk point to it, so each column can have multiple 1s in it.
         #
-        local_sim = simulate_hic_dt(this.dt,lookup_data,circulars[ii],model=model) #run the simulator, get a gMatrix in local coordinates
+        local_sim = simulate_hic_dt(this.dt,circulars[ii],model=model) #run the simulator, get a gMatrix in local coordinates
 
         if (nrow(local_sim$dat)){
             #
@@ -87,34 +90,27 @@ simulate_walks_dt <- function(walk.dt,target_region,if.comps=FALSE,pix.size=1e4,
     return(reference.walkdts)
 }
 
-simulate_hic_dt  <-  function(walk.dt,lookup_data,is.circular=FALSE,model=0){
+simulate_hic_dt  <-  function(walk.dt,is.circular=FALSE,model=0){
     dat.new = make_template_dat(walk.dt)
     if (is.circular){
-        totl = walk.dt$ends[nrow(walk.dt)]
-        dat.new[,dist1:= abs(mids[j]-mids[i])]
-        dat.new[,this.d:=pmin(dist1,totl-dist1)][,dist1:=NULL]
+        totl = walk.dt$end[nrow(walk.dt)]
+        dat.new[,dist_temp:= abs(walk.dt$mid[j]-walk.dt$mid[i])]
+        dat.new[,dist:=pmin(dist1,totl-dist1)][,dist_temp:=NULL]
     }else{
-        dat.new[,this.d := abs(mids[j]-mids[i])]
+        dat.new[,dist:= abs(walk.dt$mid[j]-walk.dt$mid[i])]
     }
     if(model==0){
-        min.res = min(lookup_data[d>0]$d)
-        max.res = 1e8
-        inds = (dat.new$this.d < max.res) & (dat.new$this.d >= min.res) & !(is.na(dat.new$this.interaction))
-        if (sum(inds) > 0){
-            dat.new[inds,density:=interp1(x=lookup_data[d>=0 & interaction==this.interaction]$d,y=lookup_data[d>=0 & interaction==this.interaction]$tot_density,xi=this.d),by=c('this.interaction')] 
-        }
-        dat.new[this.d < min.res,density:=lookup_data[d==0]$tot_density]
-        same.minval = min(lookup_data[interaction=='same' & d>0 & d <=max.res]$tot_density)
-        diff.minval = min(lookup_data[interaction=='diff' & d>0 & d <=max.res]$tot_density)
-        dat.new[this.d >= max.res & this.interaction=='same',density:=(same.minval*max.res/this.d)]        
-        dat.new[this.d >= max.res & this.interaction=='diff',density:=(diff.minval*max.res/this.d)]        
+        maxval = 1e8
+        maxval_density = depth*exp(fastKar::splineobj$distance_spline(log(maxval))) #density at maximum cutoff
+        dat.new[dist>0,value:=widthprod*exp(fastKar::splineobj$distance_spline(log(dist)))]
+        dat.new[dist==0,value:=exp(fastKar::splineobj$diag_spline(log(widthprod)))]
+        out[dist>maxval,value:=widthprod*maxval_density*maxval/dist] #assume 1/distance scaling for values > 1e8
    }else {
         min.res = min(lookup_data[d>0]$d)
-        dat.new[,density:=1500/(10*min.res^2)*(exp(-this.d/model))]
+        dat.new[,value:=widthprod*1500/(10*min.res^2)*(exp(-this.d/model))]
         #some analytical model for short/long reads with readlength as an input parameter
         #return what the data would be at 1500x depth, adjust accordingly
    }
-   dat.new[,value:=density*widthprod]
    dat.new[is.na(value),value:=0]
    return(dat.new[,.(i,j,value,id)])
 }
@@ -322,13 +318,13 @@ sum_matrices <- function(matrices){
     return(outmat)
 }
 
-make_template_dat <- function(target.bins,if.comps=TRUE){
+make_template_dat <- function(target.bins,if.comps=FALSE){
     if(inherits(target.bins,'GRanges')){
         widths = width(target.bins) %>% as.numeric
     }else if(inherits(target.bins,'data.table')){
         widths = target.bins$width
     }
-    l = length(target.bins)
+    l = length(widths)
     template.dat <- rbind(as.data.table(t(combn(l,2)))[,.(i=V1,j=V2)],data.table(i=1:l,j=1:l))[,value:=0]
     setkeyv(template.dat,c('i','j'))
     if(if.comps){
@@ -336,13 +332,46 @@ make_template_dat <- function(target.bins,if.comps=TRUE){
         template.dat[grepl('NA',this.interaction),this.interaction:=NA]
         template.dat[this.interaction=='BA' | this.interaction=='AB',this.interaction:='diff']
         template.dat[this.interaction=='AA' | this.interaction=='BB',this.interaction:='same']
-    } else {
-        template.dat[,this.interaction:='same']
     }
     template.dat[,widthprod:=widths[i]*widths[j]]
     template.dat[,id:=.I]
     return(template.dat)
 }
+
+#Rcpp version of the above 
+
+cppFunction('DataFrame make_template_dat_cpp(DataFrame A) {
+  NumericVector widths = A["width"]
+
+  int l = widths.size();
+  std::vector<int> i_vals, j_vals;
+  std::vector<double> widthprod_vals;
+  
+  // Generate combinations (i, j) where i < j
+  for (int i = 0; i < l; ++i) {
+    for (int j = i + 1; j < l; ++j) {
+      i_vals.push_back(i + 1);
+      j_vals.push_back(j + 1);
+      widthprod_vals.push_back(widths[i] * widths[j]);
+    }
+  }
+  
+  // Add diagonal elements (i, i)
+  for (int i = 0; i < l; ++i) {
+    i_vals.push_back(i + 1);
+    j_vals.push_back(i + 1);
+    widthprod_vals.push_back(widths[i] * widths[i]);
+  }
+  
+  // Create DataFrame
+  return DataFrame::create(
+    _["i"] = i_vals,
+    _["j"] = j_vals,
+    _["value"] = NumericVector(i_vals.size(), 0),
+    _["widthprod"] = widthprod_vals,
+    _["id"] = seq(1, i_vals.size())
+  );
+}')
 
 symmetrize <- function(input.mat){
     output.mat = input.mat + t(input.mat)
