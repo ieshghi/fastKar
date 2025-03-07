@@ -9,3 +9,6 @@
 
 # compartment lookup table
 'comparment_lookup'
+
+# splines for Hi-C prediction
+'splineobj'
