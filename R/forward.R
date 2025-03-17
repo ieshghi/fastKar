@@ -1,7 +1,7 @@
 # In this file I define some functions used in the prediction of 3D structure at rearrangements.
 
 #this branch will be for me to develop a version of the forward model which is tiling-ambiguous, with helper functions to re-do the tiling as in the old version
-tile_and_prep <- function(walks,target_region=NULL,pix.size=1e5,if.comps=FALSE,mc.cores=1,if.sum=TRUE,depth=1,model=0){
+forward_simulate <- function(walks,target_region=NULL,pix.size=1e5,if.comps=FALSE,mc.cores=1,if.sum=TRUE,depth=1,model=0){
     #
     if (is.null(target_region)){
         target_region = walks$footprint
@@ -32,22 +32,22 @@ tile_and_prep <- function(walks,target_region=NULL,pix.size=1e5,if.comps=FALSE,m
     }
     #
     tiled.walks.dt = mclapply(input_walks$grl,function(walk){
-        toflip = which(as.character(strand(walk))=='-')
-        merwalk = gr.merge(walk,tiled.target[,c()]) #merge it with the target bins so edges all match
+        toflip = which(as.character(strand(walk))=='-') #keep track of the negative strand steps so we know to flip em
+        merwalk = gr.merge(walk[,c()],tiled.target[,c()],all.query=T) #merge it with the target bins so edges all match
         strand(merwalk) = strand(walk[merwalk$query.id])
         inds = sort(merwalk$query.id,index.return=TRUE)
-        merwalk.st = merwalk[inds$ix][,c('query.id','subject.id')]
-        merwalk.st$compartment = tiled.target[merwalk.st$subject.id]$compartment
+        merwalk.st = merwalk[inds$ix]
+        ontarget = which(!is.na(merwalk.st$subject.id))
+        browser()
+        merwalk.st[ontarget]$compartment = tiled.target[merwalk.st[ontarget]$subject.id]$compartment
 
         id.dt = gr2dt(merwalk.st)
-        id.dt[query.id %in% toflip,subject.id:=rev(subject.id),by=query.id]
+        id.dt[query.id %in% toflip,subject.id:=rev(subject.id),by=query.id] #flip negative strand steps
         setkeyv(id.dt,'query.id')
         return(id.dt[,.(width,tile.id=.I,orig.id=subject.id,compartment)])
     },mc.cores=mc.cores)
-    return(list(walkdt=tiled.walks.dt,circular=input_walks$circular,target=tiled.target,gg=input_graph))
+    return(simulate_walks_dt(list(walkdt=tiled.walks.dt,circular=input_walks$circular,target=tiled.target,gg=input_graph),if.comps=if.comps,mc.cores=mc.cores,if.sum=if.sum,depth=depth,model=model))
 }
-
-split_and_prep<- function(walks,target_region=NULL){}
 
 simulate_walks_dt <- function(tiling.obj,if.comps=FALSE,mc.cores=1,if.sum=TRUE,depth=1,model=0){
     #tiling obj is the output of the "tile_and_prep" or "split_and_prep" objects
@@ -69,7 +69,7 @@ simulate_walks_dt <- function(tiling.obj,if.comps=FALSE,mc.cores=1,if.sum=TRUE,d
         this.dt[,start:=end - width + 1] #start coordinates are the ends minus widths
         this.dt[,mid:=(start+end)/2]
         #
-        transfmat.spr = sparseMatrix(i=this.dt$tile.id,j=this.dt$orig.id,x=1,dims=c(nrow(this.dt),length(tiled.target))) #this sparse matrix gives us the lift back to reference. Since all bins in liftedwalk are subsets of bins in merwalk, this is just a matrix of ones, but each bin in merwalk can have multiple bins in liftedwalk point to it, so each column can have multiple 1s in it.
+        transfmat.spr = sparseMatrix(i=this.dt[!is.na(orig.id)]$tile.id,j=this.dt[!is.na(orig.id)]$orig.id,x=1,dims=c(nrow(this.dt),length(tiled.target))) #this sparse matrix gives us the lift back to reference. Since all bins in liftedwalk are subsets of bins in merwalk, this is just a matrix of ones, but each bin in merwalk can have multiple bins in liftedwalk point to it, so each column can have multiple 1s in it.
         #
         local_sim = simulate_hic_dt(this.dt,circulars[ii],model=model) #run the simulator, get a gMatrix in local coordinates
 
@@ -81,7 +81,7 @@ simulate_walks_dt <- function(tiling.obj,if.comps=FALSE,mc.cores=1,if.sum=TRUE,d
             #
             tsparse.ref = as(refmat,'TsparseMatrix')
             dt.ref = data.table(i=tsparse.ref@i+1,j=tsparse.ref@j+1,value=tsparse.ref@x)[i<=j]# change to long format, Tsparsematrix is 0-indexed
-            out.dt = copy(target.dat)[dt.ref,on=.(i,j),value:=i.value][,widthprod:=NULL]
+            out.dt = copy(target.dat)[dt.ref,on=.(i,j),value:=i.value][,widthprod:=NULL] #join with the template hi-c map, since 
         }else{
             out.dt = data.table::copy(target.dat[,.(i,j,id,value)])
         }
@@ -331,6 +331,7 @@ make_template_dat <- function(target.bins,if.comps=FALSE){
     template.dat <- rbind(as.data.table(t(combn(l,2)))[,.(i=V1,j=V2)],data.table(i=1:l,j=1:l))[,value:=0]
     setkeyv(template.dat,c('i','j'))
     if(if.comps){
+        target.bins[is.na(target.bins$compartment)]$compartment='A'
         template.dat[,this.interaction:=paste0(target.bins[i]$compartment,target.bins[j]$compartment)]
         template.dat[grepl('NA',this.interaction),this.interaction:=NA]
         template.dat[this.interaction=='BA' | this.interaction=='AB',this.interaction:='diff']
