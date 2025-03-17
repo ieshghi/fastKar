@@ -282,3 +282,33 @@ cppFunction('List traverse_graph_cpp(DataFrame A, NumericVector loose_ends) {
   return result;
 }
 ')
+
+walks.from.edges <- function(wiring,shuffle=0,return.gw = FALSE,ifcpp=TRUE){ #wrapper function
+  internal.edges = wiring$internal.edges
+  loose.ends = wiring$loose.ends
+  gr.splitnodes = wiring$gr.splitnodes
+  gg = wiring$gg
+  edges = copy(internal.edges) 
+  if (shuffle==1){
+    edges[,right:=ifelse(cn>1,sample(right,unique(cn)),right),by=n] #shuffle rewiring
+  } else if (shuffle==2){
+    nswap = sample(edges[cn>1]$n,1)
+    edges[n==nswap,sright:=sample(right,unique(cn))]
+    edges[,right:=ifelse(is.na(sright),right,sright)][,sright:=NULL]
+  } else if (shuffle < 0){
+    nswap = -shuffle
+    edges[n==nswap,sright:=sample(right,unique(cn))]
+    edges[,right:=ifelse(is.na(sright),right,sright)][,sright:=NULL]
+  }
+  if (ifcpp){
+    walks.out = traverse_graph_cpp(internal.edges,loose.ends)
+  } else{
+    walks.out = traverse_graph(internal.edges,loose.ends)
+  }
+  if (return.gw){
+    return(c(gW(graph=gg,snode.id=walks.out$paths),gW(graph=gg,snode.id=walks.out$cycles,circular=TRUE)))
+  }else{
+    return(list(gg=gg,paths=walks.out$paths,cycles=walks.out$cycles))
+  }
+  return(walks.out)
+}

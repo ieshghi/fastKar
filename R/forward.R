@@ -44,7 +44,7 @@ tile_and_prep <- function(walks,target_region=NULL,pix.size=1e5,if.comps=FALSE,m
         setkeyv(id.dt,'query.id')
         return(id.dt[,.(width,tile.id=.I,orig.id=subject.id,compartment)])
     },mc.cores=mc.cores)
-    return(list(walkdt=tiled.walks.dt,circular=input_walks$circulars,target=tiled.target,gg=input_graph))
+    return(list(walkdt=tiled.walks.dt,circular=input_walks$circular,target=tiled.target,gg=input_graph))
 }
 
 split_and_prep<- function(walks,target_region=NULL){}
@@ -57,54 +57,59 @@ simulate_walks_dt <- function(tiling.obj,if.comps=FALSE,mc.cores=1,if.sum=TRUE,d
     # orig.id (id of tile in the target region),
     # and compartment
     tiled.target = tiling.obj$target
-    walkdt = tiling.obj$walkdt
-    target.dat = make_template_dat(tiled.target,if.comps=if.comps) #useful to make a data.table for all the gMatrices going forward, this is defined on the tiling of the target so that we know exactly what the outputs will look like. Using a single "ID" column to refer to the pixels accelerates summation further on.
+    walk.dts = tiling.obj$walkdt
+    circulars = tiling.obj$circular
+    target.dat = as.data.table(make_template_dat_cpp(gr2dt(tiled.target))) #useful to make a data.table for all the gMatrices going forward, this is defined on the tiling of the target so that we know exactly what the outputs will look like. Using a single "ID" column to refer to the pixels accelerates summation further on.
+    setkeyv(target.dat,c('i','j'))
 
-    reference.walkdts = mclapply(walk.dts,function(walk.dt){
+    reference.walkdts = mclapply(1:length(walk.dts),function(ii){
+        walk.dt = walk.dts[[ii]]
         this.dt = copy(walk.dt) 
         this.dt[,end:=cumsum(width)] #end coordinates along the allele are just the sum of widths
         this.dt[,start:=end - width + 1] #start coordinates are the ends minus widths
         this.dt[,mid:=(start+end)/2]
         #
-        transfmat.spr = sparseMatrix(i=this.dt$tile.id,j=this.dt$orig.id,x=1,dims=c(nrow(this.dt),nrow(this.dt))) #this sparse matrix gives us the lift back to reference. Since all bins in liftedwalk are subsets of bins in merwalk, this is just a matrix of ones, but each bin in merwalk can have multiple bins in liftedwalk point to it, so each column can have multiple 1s in it.
+        transfmat.spr = sparseMatrix(i=this.dt$tile.id,j=this.dt$orig.id,x=1,dims=c(nrow(this.dt),length(tiled.target))) #this sparse matrix gives us the lift back to reference. Since all bins in liftedwalk are subsets of bins in merwalk, this is just a matrix of ones, but each bin in merwalk can have multiple bins in liftedwalk point to it, so each column can have multiple 1s in it.
         #
         local_sim = simulate_hic_dt(this.dt,circulars[ii],model=model) #run the simulator, get a gMatrix in local coordinates
 
-        if (nrow(local_sim$dat)){
+        if (nrow(local_sim)){
             #
-            localmat = local_sim$mat %>% unname %>% as.matrix %>% symmetrize #convert to a matrix and symmetrize
+            localmat = sparseMatrix(i=local_sim$i,j=local_sim$j,x=local_sim$value) %>% symmetrize #convert to a matrix and symmetrize
             #
             refmat = (Matrix::t(transfmat.spr) %*% localmat)%*%transfmat.spr #apply coordinate transformation 
             #
             tsparse.ref = as(refmat,'TsparseMatrix')
             dt.ref = data.table(i=tsparse.ref@i+1,j=tsparse.ref@j+1,value=tsparse.ref@x)[i<=j]# change to long format, Tsparsematrix is 0-indexed
-            out.dt = merge.data.table(data.table::copy(template.dat),dt.ref,all.x=TRUE,by=c('i','j'))[,.(i,j,id,value.y,value=value.x)] # merge with the template data table so the ID matches the relevant coordinates for future summation
-            out.dt[!is.na(value.y),value:=value+value.y]
-            out.dt = out.dt[,.(i,j,id,value)]
+            out.dt = copy(target.dat)[dt.ref,on=.(i,j),value:=i.value][,widthprod:=NULL]
         }else{
-            out.dt = data.table::copy(template.dat[,.(i,j,id,value)])
+            out.dt = data.table::copy(target.dat[,.(i,j,id,value)])
         }
-        return(out.dt[,value:=walk.cn[ii]*value])
+        if (exists('walk.cn')){
+            return(out.dt[,value:=walk.cn[ii]*value])
+        }else{
+            return(out.dt)
+        }
         #
     },mc.cores=mc.cores)
     return(reference.walkdts)
 }
 
 simulate_hic_dt  <-  function(walk.dt,is.circular=FALSE,model=0){
-    dat.new = make_template_dat(walk.dt)
+    dat.new = as.data.table(make_template_dat_cpp(walk.dt))
     if (is.circular){
         totl = walk.dt$end[nrow(walk.dt)]
         dat.new[,dist_temp:= abs(walk.dt$mid[j]-walk.dt$mid[i])]
-        dat.new[,dist:=pmin(dist1,totl-dist1)][,dist_temp:=NULL]
+        dat.new[,dist:=pmin(dist_temp,totl-dist_temp)][,dist_temp:=NULL]
     }else{
         dat.new[,dist:= abs(walk.dt$mid[j]-walk.dt$mid[i])]
     }
     if(model==0){
         maxval = 1e8
-        maxval_density = depth*exp(fastKar::splineobj$distance_spline(log(maxval))) #density at maximum cutoff
+        maxval_density = exp(fastKar::splineobj$distance_spline(log(maxval))) #density at maximum cutoff
         dat.new[dist>0,value:=widthprod*exp(fastKar::splineobj$distance_spline(log(dist)))]
         dat.new[dist==0,value:=exp(fastKar::splineobj$diag_spline(log(widthprod)))]
-        out[dist>maxval,value:=widthprod*maxval_density*maxval/dist] #assume 1/distance scaling for values > 1e8
+        dat.new[dist>maxval,value:=widthprod*maxval_density*maxval/dist] #assume 1/distance scaling for values > 1e8
    }else {
         min.res = min(lookup_data[d>0]$d)
         dat.new[,value:=widthprod*1500/(10*min.res^2)*(exp(-this.d/model))]
@@ -120,7 +125,7 @@ run_analysis <- function(walks,target_region=NULL,if.comps=FALSE,pix.size=1e5,mc
     if (pix.size==1e4){
         lookup_data = fastKar::small_lookup 
     }else if(pix.size==1e6){
-        lookup_data = fastKar::big_lookup 
+        lookup_data = fastKar::large_lookup 
     }
     if (is.null(target_region)){
         target_region = walks$footprint
@@ -173,12 +178,10 @@ run_analysis <- function(walks,target_region=NULL,if.comps=FALSE,pix.size=1e5,mc
         liftedwalk$compartment = tile.walk$compartment #load compartments
         liftedwalk$orig.id = tile.walk$orig.id
         liftedwalk$tile.id = tile.walk$tile.id #the ID of the bin in its own coordinates
-        browser()
         #
         transfmat.spr = sparseMatrix(i=liftedwalk$tile.id,j=liftedwalk$orig.id,x=1,dims=c(length(liftedwalk),length(tiled.target))) #this sparse matrix gives us the lift back to reference. Since all bins in liftedwalk are subsets of bins in merwalk, this is just a matrix of ones, but each bin in merwalk can have multiple bins in liftedwalk point to it, so each column can have multiple 1s in it.
         #
-        local_sim = simulate_hic(liftedwalk,lookup_data,circulars[[ii]],model=model) #run the simulator, get a gMatrix in local coordinates
-
+        local_sim = simulate_hic(liftedwalk,lookup_data,if.comps=if.comps,is.circular=circulars[[ii]],model=model) #run the simulator, get a gMatrix in local coordinates
         if (nrow(local_sim$dat)){
             #
             localmat = local_sim$mat %>% unname %>% as.matrix %>% symmetrize #convert to a matrix and symmetrize
@@ -232,13 +235,13 @@ eval_comps <- function(tiled.walk,comps.gr=NULL){
     return(tiled.walk)
 }
 
-simulate_hic  <-  function(gr,lookup_data,is.circular=FALSE,model=0){
+simulate_hic  <-  function(gr,lookup_data,if.comps=FALSE,is.circular=FALSE,model=0){
     grdt = gr2dt(gr)
     widths = grdt$width
     ends = grdt$end
     mids = gr%>%mid
     nbin =  length(gr)
-    dat.new = make_template_dat(gr)
+    dat.new = make_template_dat(gr,if.comps=if.comps)
     if (is.circular){
         totl = ends[nbin]
         dat.new[,dist1:= abs(mids[j]-mids[i])]
@@ -332,16 +335,17 @@ make_template_dat <- function(target.bins,if.comps=FALSE){
         template.dat[grepl('NA',this.interaction),this.interaction:=NA]
         template.dat[this.interaction=='BA' | this.interaction=='AB',this.interaction:='diff']
         template.dat[this.interaction=='AA' | this.interaction=='BB',this.interaction:='same']
+    } else{
+        template.dat[,this.interaction:='same']
     }
     template.dat[,widthprod:=widths[i]*widths[j]]
     template.dat[,id:=.I]
     return(template.dat)
 }
 
-#Rcpp version of the above 
-
+#Rcpp version of the above, no compartments for now
 cppFunction('DataFrame make_template_dat_cpp(DataFrame A) {
-  NumericVector widths = A["width"]
+  NumericVector widths = A["width"];
 
   int l = widths.size();
   std::vector<int> i_vals, j_vals;
@@ -374,8 +378,8 @@ cppFunction('DataFrame make_template_dat_cpp(DataFrame A) {
 }')
 
 symmetrize <- function(input.mat){
-    output.mat = input.mat + t(input.mat)
-    diag(output.mat) = diag(input.mat)
+    output.mat = input.mat + Matrix::t(input.mat)
+    Matrix::diag(output.mat) = Matrix::diag(input.mat)
     return(output.mat)
 }
 
