@@ -1,7 +1,7 @@
 # In this file I define some functions used in the prediction of 3D structure at rearrangements.
 
 #this branch will be for me to develop a version of the forward model which is tiling-ambiguous, with helper functions to re-do the tiling as in the old version
-forward_simulate <- function(walks,target_region=NULL,pix.size=1e5,if.comps=FALSE,mc.cores=1,if.sum=TRUE,depth=1,model=0){
+forward_simulate <- function(walks,target_region=NULL,pix.size=1e5,if.comps=FALSE,mc.cores=1,if.sum=TRUE,depth=1,model=0,if.interchr=T){
     #
     if (is.null(target_region)){
         target_region = walks$footprint
@@ -9,10 +9,19 @@ forward_simulate <- function(walks,target_region=NULL,pix.size=1e5,if.comps=FALS
     #
     if (if.comps==FALSE){
         comps.gr = NULL
-    }else if(if.comps=='rand'){
-        comps.gr = 'rand'
+        if(if.interchr & ('cn' %in% colnames(values(walks$graph$gr)))){
+            tiled.target = gr.merge(gr.tile(target_region,pix.size),walks$graph$gr[strand(walks$graph$gr)=='+'])[,c('cn')]
+            tiled.target$tile.id = 1:length(tiled.target)
+        }else {
+            warning('No CN provided, will not calculate interchromosomal contacts.')
+            tiled.target = gr.tile(target_region,pix.size)
+            if.interchr=F 
+        }
+        tiled.target$compartment = 'A'
     }else{
+        stop('Compartments not supported in this version')
         comps.gr = gr.nochr(fastKar::compartment_lookup)
+        tiled.target = eval_comps(gr.tile(target_region,pix.size),comps.gr)
     }
     #
     input_graph = walks$graph %&% target_region
@@ -20,15 +29,6 @@ forward_simulate <- function(walks,target_region=NULL,pix.size=1e5,if.comps=FALS
     walk.cn = input_walks$dt$cn
     if(is.null(walk.cn)){
         walk.cn = rep(1,length(input_walks))
-        input_walks$set(cn=walk.cn)
-    }
-    nw = length(input_walks)
-    #
-    if (is.null(comps.gr)){
-        tiled.target = gr.tile(target_region,pix.size)
-        tiled.target$compartment = 'A'
-    } else {
-        tiled.target = eval_comps(gr.tile(target_region,pix.size),comps.gr)
     }
     #
     tiled.walks.dt = mclapply(input_walks$grl,function(walk){
@@ -37,19 +37,20 @@ forward_simulate <- function(walks,target_region=NULL,pix.size=1e5,if.comps=FALS
         strand(merwalk) = strand(walk[merwalk$query.id])
         inds = sort(merwalk$query.id,index.return=TRUE)
         merwalk.st = merwalk[inds$ix]
-        ontarget = which(!is.na(merwalk.st$subject.id))
-        browser()
-        merwalk.st[ontarget]$compartment = tiled.target[merwalk.st[ontarget]$subject.id]$compartment
-
+        if (if.comps){
+            stop('Compartments not supported in this version')
+        }else{
+            merwalk.st$compartment='A'
+        }
         id.dt = gr2dt(merwalk.st)
         id.dt[query.id %in% toflip,subject.id:=rev(subject.id),by=query.id] #flip negative strand steps
         setkeyv(id.dt,'query.id')
         return(id.dt[,.(width,tile.id=.I,orig.id=subject.id,compartment)])
     },mc.cores=mc.cores)
-    return(simulate_walks_dt(list(walkdt=tiled.walks.dt,circular=input_walks$circular,target=tiled.target,gg=input_graph),if.comps=if.comps,mc.cores=mc.cores,if.sum=if.sum,depth=depth,model=model))
+    return(simulate_walks_dt(list(walkdt=tiled.walks.dt,walk.cn=walk.cn,circular=input_walks$circular,target=tiled.target,gg=input_graph),if.comps=if.comps,mc.cores=mc.cores,if.sum=if.sum,depth=depth,model=model,if.interchr=if.interchr))
 }
 
-simulate_walks_dt <- function(tiling.obj,if.comps=FALSE,mc.cores=1,if.sum=TRUE,depth=1,model=0){
+simulate_walks_dt <- function(tiling.obj,if.comps=FALSE,mc.cores=1,if.sum=TRUE,depth=1,model=0,if.interchr=T){
     #tiling obj is the output of the "tile_and_prep" or "split_and_prep" objects
     #each element of walk.dt has four columns:
     # width (width of the tile)
@@ -59,10 +60,11 @@ simulate_walks_dt <- function(tiling.obj,if.comps=FALSE,mc.cores=1,if.sum=TRUE,d
     tiled.target = tiling.obj$target
     walk.dts = tiling.obj$walkdt
     circulars = tiling.obj$circular
+    walk.cn = tiling.obj$walk.cn
     target.dat = as.data.table(make_template_dat_cpp(gr2dt(tiled.target))) #useful to make a data.table for all the gMatrices going forward, this is defined on the tiling of the target so that we know exactly what the outputs will look like. Using a single "ID" column to refer to the pixels accelerates summation further on.
     setkeyv(target.dat,c('i','j'))
-
-    reference.walkdts = mclapply(1:length(walk.dts),function(ii){
+    #
+    reference.intrachr = mclapply(1:length(walk.dts),function(ii){
         walk.dt = walk.dts[[ii]]
         this.dt = copy(walk.dt) 
         this.dt[,end:=cumsum(width)] #end coordinates along the allele are just the sum of widths
@@ -81,18 +83,21 @@ simulate_walks_dt <- function(tiling.obj,if.comps=FALSE,mc.cores=1,if.sum=TRUE,d
             #
             tsparse.ref = as(refmat,'TsparseMatrix')
             dt.ref = data.table(i=tsparse.ref@i+1,j=tsparse.ref@j+1,value=tsparse.ref@x)[i<=j]# change to long format, Tsparsematrix is 0-indexed
-            out.dt = copy(target.dat)[dt.ref,on=.(i,j),value:=i.value][,widthprod:=NULL] #join with the template hi-c map, since 
+            setkeyv(dt.ref,c('i','j'))
+            intra.contacts = copy(target.dat)[dt.ref,on=.(i,j),value:=walk.cn[ii]*i.value] #join with the template hi-c map. Also multiply contacts by copy-number of the walk
         }else{
-            out.dt = data.table::copy(target.dat[,.(i,j,id,value)])
+            intra.contacts = data.table::copy(target.dat[,.(i,j,id,value,widthprod)])
         }
-        if (exists('walk.cn')){
-            return(out.dt[,value:=walk.cn[ii]*value])
-        }else{
-            return(out.dt)
-        }
-        #
     },mc.cores=mc.cores)
-    return(reference.walkdts)
+    #
+    if(if.interchr & model==0){
+        out.dt = inter_allele_dt(reference.intrachr,walk.dts,tiled.target,walk.cn,if.comps=if.comps,mc.cores=mc.cores)
+    }else{
+        out.dt = reference.intrachr 
+    }
+    # then scale by depth
+    # then sum everything
+    return(out.dt)
 }
 
 simulate_hic_dt  <-  function(walk.dt,is.circular=FALSE,model=0){
@@ -111,7 +116,7 @@ simulate_hic_dt  <-  function(walk.dt,is.circular=FALSE,model=0){
         dat.new[dist==0,value:=exp(fastKar::splineobj$diag_spline(log(widthprod)))]
         dat.new[dist>maxval,value:=widthprod*maxval_density*maxval/dist] #assume 1/distance scaling for values > 1e8
    }else {
-        min.res = min(lookup_data[d>0]$d)
+        min.res = min(fastKar::small_lookup[d>0]$d)
         dat.new[,value:=widthprod*1500/(10*min.res^2)*(exp(-this.d/model))]
         #some analytical model for short/long reads with readlength as an input parameter
         #return what the data would be at 1500x depth, adjust accordingly
@@ -273,6 +278,40 @@ simulate_hic  <-  function(gr,lookup_data,if.comps=FALSE,is.circular=FALSE,model
    return(gM(gr = gr,dat = dat.new[,.(i,j,value,id)]))
 }
 
+inter_allele_dt <- function(intra.dts,walk.dts,tiled.target,walk.cn,if.comps=F,mc.cores=1){
+#    cn.gr = input_graph$gr[,c('cn')]
+#    all.gr = gr.val(tiled.target,cn.gr,'cn')
+    target.dt = as.data.table(values(tiled.target))[,.(orig.id=tile.id,cn,compartment)]
+    template = data.table::copy(intra.dts[[1]])
+    if (if.comps){
+        lookup_interchr = fastKar::small_lookup[d<0]
+        template[,raw_density:=lookup_interchr[interaction==this.interaction]$tot_density,by=this.interaction]
+    }else{
+        lookup_interchr = fastKar::small_lookup[d<0 & interaction=='same']
+        template[,raw_density:=lookup_interchr$tot_density]
+    }
+    #
+    filled_matrices = mclapply(1:length(walk.dts),function(x){
+        this.walk = walk.dts[[x]][,my.cn:=.N,by=orig.id]
+        this.target = merge.data.table(target.dt,this.walk[,.(orig.id,my.cn)][1:10],by='orig.id',all.x=TRUE)[,my.cn:=ifelse(is.na(my.cn),0,my.cn)]
+        this.target[,other.cn:=cn-my.cn]
+
+        mydat = data.table::copy(template)
+        mydat = merge.data.table(merge.data.table(mydat,this.target[,.(orig.id,my.cn)],by.x='i',by.y='orig.id'),this.target[,.(orig.id,other.cn)],by.x='j',by.y='orig.id')
+        mydat[,cnprod:=ifelse(is.na(my.cn*other.cn),0,my.cn*other.cn)]
+        mydat[,value:=walk.cn*raw_density*cnprod*widthprod]
+        mydat[is.na(value),value:=0]
+        # subtract CN of myself from the overall CN from jabba
+        # then the number of counts for contact i-j is:
+            # cts = (CN of i inside myself)*(CN of j in everyone else)*(p from the lookup table(AA/AB/BB))*(binwidth^2) 
+        # add the interchromosomal gmat to my self-contact gmat
+        combdat = merge.data.table(mydat[,.(inter_value=value,id)],intra.dts[[x]][,.(i,j,intra_value=value,id)],by='id')[,value:=intra_value+inter_value]
+        out.dat = combdat[,.(i,j,id,value)]
+        return(out.dat)
+    },mc.cores=mc.cores)
+    return(filled_matrices)
+}
+
 inter_allele <- function(rebinned_dats,tiled.target,input_walks,lookup_data,template.dat,mc.cores = 10,model=0){
     if (model==0){
     cn.gr = input_walks$graph$gr[,c('cn')]
@@ -347,29 +386,18 @@ make_template_dat <- function(target.bins,if.comps=FALSE){
 #Rcpp version of the above, no compartments for now
 cppFunction('DataFrame make_template_dat_cpp(DataFrame A) {
   NumericVector widths = A["width"];
-
   int l = widths.size();
   std::vector<int> i_vals, j_vals;
   std::vector<double> widthprod_vals;
-  
-  // Generate combinations (i, j) where i < j
-  for (int i = 0; i < l; ++i) {
-    for (int j = i + 1; j < l; ++j) {
+
+  for (int i = 0; i < l; ++i) { // make the combinations where i<=j
+    for (int j = i; j < l; ++j) {
       i_vals.push_back(i + 1);
       j_vals.push_back(j + 1);
       widthprod_vals.push_back(widths[i] * widths[j]);
     }
   }
-  
-  // Add diagonal elements (i, i)
-  for (int i = 0; i < l; ++i) {
-    i_vals.push_back(i + 1);
-    j_vals.push_back(i + 1);
-    widthprod_vals.push_back(widths[i] * widths[i]);
-  }
-  
-  // Create DataFrame
-  return DataFrame::create(
+  return DataFrame::create( //return as a dataframe
     _["i"] = i_vals,
     _["j"] = j_vals,
     _["value"] = NumericVector(i_vals.size(), 0),
