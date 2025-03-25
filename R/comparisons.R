@@ -117,3 +117,27 @@ compdats <- function(dat_test,dat_true,theta=0,ifscale=FALSE,ifsum=TRUE,checkind
         return(combdat[,.(value=-logprob,i,j,id)])
     }
 }
+make_noisymap <- function(map_in,theta=0,num.copies=1,mc.cores=20){
+    dats = make_noisydat(map_in,num.copies,theta)
+    out.maps = mclapply(dats,function(i){gM(gr=map_in$gr,dat=i)},mc.cores=mc.cores)
+    return(out.maps)
+}
+
+make_noisydat <- function(map_in,num.copies=1,theta=0,backlambda = 0){ #samples from negative binomial distribution, unless theta=0 then uses poisson
+    mapdat = map_in$dat
+    meanvals = mapdat$value
+    if (theta==0){
+        newval = rpois(length(meanvals)*num.copies,rep(meanvals,num.copies))
+    }else {
+        newval = rnbinom(length(meanvals)*num.copies,size=theta,mu=rep(meanvals,num.copies))
+    }
+    if (backlambda > 0){
+        newval = newval + rpois(length(newval),backlambda)
+    }
+    multimap = do.call(rbind,rep(list(mapdat),num.copies))
+    multimap$map.ids = lapply(1:num.copies,function(i){rep(i,nrow(mapdat))}) %>% unlist
+    multimap$value = newval
+    out.dats = split(multimap,by='map.ids')
+    #out.gms = lapply(out.dats,function(i){gM(gr=map_in$gr,dat=i)})
+    return(out.dats)
+}
