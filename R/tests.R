@@ -87,9 +87,21 @@ makewalk <- function(tiles,nodewalk,background = FALSE){
   segments = gG(nodes=tiles)$gr[,c()]
   segments$node.id = 1:length(segments)
   if (is.list(nodewalk)){
-    walk.gr = lapply(nodewalk,function(w){segments[w]})
+    walk.gr = lapply(nodewalk,function(w){
+      s = rep('+',length(w))
+      wa = abs(w)
+      s[w<0]='-'
+      out = segments[abs(w)]
+      strand(out) = s
+      return(out)
+      })
   }else{
-    walk.gr = segments[nodewalk]
+      s = rep('+',length(nodewalk))
+      wa = abs(nodewalk)
+      s[nodewalk<0]='-'
+      out = segments[abs(nodewalk)]
+      strand(out) = s
+      walk.gr = out
   }
   if (background){
     norm.gr = segments %Q% (strand=='+')

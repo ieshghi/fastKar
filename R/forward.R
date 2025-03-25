@@ -1,53 +1,70 @@
 # In this file I define some functions used in the prediction of 3D structure at rearrangements.
 
 #this branch will be for me to develop a version of the forward model which is tiling-ambiguous, with helper functions to re-do the tiling as in the old version
+
+#possible further optimizations:
+# - inter-chromosomal contacts: currently loop over all walks and perform a linear operation before summing. 
+#   is it possible to do it all in one go instead?
+# - one of the bottleneck functions is matrix symmetrization. Can i just write cpp code to do the matmul,
+#   assuming a symmetric matrix (basically setting i<-->j when j<i)
 forward_simulate <- function(walks,target_region=NULL,pix.size=1e5,if.comps=FALSE,mc.cores=1,if.sum=TRUE,depth=1,model=0,if.interchr=T){
+    #TODO:
+    #split into a "prep" function which does the merging of the target region and nodes etc.
+    #   and then a "match" function mapping the walks to the tiles and flips them if negative strand
+    nodesgr = walks$graph$gr[,c('node.id')] 
+    nodesgr = nodesgr[strand(nodesgr)=='+']
+    widthdt = gr2dt(nodesgr)[,.(nodewidth=width,node.id)]
     #
+    # need to add mode where input doesn't need to be gWalk, so we don't need to exploit $footprint and $dt$cn
     if (is.null(target_region)){
         target_region = walks$footprint
+        input_walks = walks
+    } else{
+        input_walks = walks %&% target_region
     }
-    #
-    if (if.comps==FALSE){
-        comps.gr = NULL
-        if(if.interchr & ('cn' %in% colnames(values(walks$graph$gr)))){
-            tiled.target = gr.merge(gr.tile(target_region,pix.size),walks$graph$gr[strand(walks$graph$gr)=='+'])[,c('cn')]
-            tiled.target$tile.id = 1:length(tiled.target)
-        }else {
-            warning('No CN provided, will not calculate interchromosomal contacts.')
-            tiled.target = gr.tile(target_region,pix.size)
-            if.interchr=F 
-        }
-        tiled.target$compartment = 'A'
-    }else{
-        stop('Compartments not supported in this version')
-        comps.gr = gr.nochr(fastKar::compartment_lookup)
-        tiled.target = eval_comps(gr.tile(target_region,pix.size),comps.gr)
-    }
-    #
-    input_graph = walks$graph %&% target_region
-    input_walks = walks %&% target_region
     walk.cn = input_walks$dt$cn
     if(is.null(walk.cn)){
         walk.cn = rep(1,length(input_walks))
     }
     #
-    tiled.walks.dt = mclapply(input_walks$grl,function(walk){
-        toflip = which(as.character(strand(walk))=='-') #keep track of the negative strand steps so we know to flip em
-        merwalk = gr.merge(walk[,c()],tiled.target[,c()],all.query=T) #merge it with the target bins so edges all match
-        strand(merwalk) = strand(walk[merwalk$query.id])
-        inds = sort(merwalk$query.id,index.return=TRUE)
-        merwalk.st = merwalk[inds$ix]
-        if (if.comps){
-            stop('Compartments not supported in this version')
-        }else{
-            merwalk.st$compartment='A'
-        }
-        id.dt = gr2dt(merwalk.st)
-        id.dt[query.id %in% toflip,subject.id:=rev(subject.id),by=query.id] #flip negative strand steps
-        setkeyv(id.dt,'query.id')
-        return(id.dt[,.(width,tile.id=.I,orig.id=subject.id,compartment)])
+    if (pix.size > 0){ #tiling mode
+        tiled.target = gr2dt(gr.merge(gr.tile(target_region,pix.size),nodesgr))
+    } else{ # split node mode
+        # PUT STUFF HERE
+    }
+    tiled.target[,tile.id:=.I]
+    if(!('cn' %in% colnames(values(walks$graph$gr)))){
+        tiled.target = tiled.target[,.(tile.id,width,node.id,cn)]
+    }else {
+        warning('No CN provided, will not calculate interchromosomal contacts.')
+        tiled.target = tiled.target[,.(tile.id,width,node.id)]
+        if.interchr=F 
+    }
+    if (if.comps==FALSE){
+        comps.gr = NULL
+        tiled.target$compartment = 'A'
+    }else{
+        stop('Compartments not supported in this version')
+        comps.gr = gr.nochr(fastKar::compartment_lookup)
+        tiled.target = eval_comps(gr.tile(target_region,pix.size),comps.gr) #need to update eval_comps to dt mode
+    }
+    #
+    tiled.walks.dt = mclapply(input_walks$snode.id,function(walk){
+        walk.dt = data.table(node.id=abs(walk),strand=ifelse(sign(walk)==+1,'+','-'))[,order:=.I]
+        walk.dt = merge.data.table(walk.dt,tiled.target,by='node.id',all.x=T,sort=F,allow.cartesian = T)
+        toflip = walk.dt$strand=='-'
+        walk.dt[,step.id:=.I]
+        walk.dt[toflip,step.id:=rev(step.id),by=order]
+        setkeyv(walk.dt,'step.id')
+        walk.dt = merge.data.table(walk.dt,widthdt,by='node.id',all.x=T)
+        walk.dt[is.na(width),width:=nodewidth]
+        walk.dt[,nodewidth:=NULL]
+        # what about when a tile is outside target_region? pull width from nodesgr. OK if compartment is NA, since contacts with that region dont matter
+        id.dt = walk.dt[,.(orig.id=tile.id,compartment,width,step.id)][,tile.id:=step.id][,step.id:=NULL]
+        setkeyv(id.dt,'tile.id')
+        return(id.dt)
     },mc.cores=mc.cores)
-    return(simulate_walks_dt(list(walkdt=tiled.walks.dt,walk.cn=walk.cn,circular=input_walks$circular,target=tiled.target,gg=input_graph),if.comps=if.comps,mc.cores=mc.cores,if.sum=if.sum,depth=depth,model=model,if.interchr=if.interchr))
+    return(simulate_walks_dt(list(walkdt=tiled.walks.dt,walk.cn=walk.cn,circular=input_walks$circular,target=tiled.target),if.comps=if.comps,mc.cores=mc.cores,if.sum=if.sum,depth=depth,model=model,if.interchr=if.interchr))
 }
 
 simulate_walks_dt <- function(tiling.obj,if.comps=FALSE,mc.cores=1,if.sum=TRUE,depth=1,model=0,if.interchr=T){
@@ -61,7 +78,7 @@ simulate_walks_dt <- function(tiling.obj,if.comps=FALSE,mc.cores=1,if.sum=TRUE,d
     walk.dts = tiling.obj$walkdt
     circulars = tiling.obj$circular
     walk.cn = tiling.obj$walk.cn
-    target.dat = as.data.table(make_template_dat_cpp(gr2dt(tiled.target))) #useful to make a data.table for all the gMatrices going forward, this is defined on the tiling of the target so that we know exactly what the outputs will look like. Using a single "ID" column to refer to the pixels accelerates summation further on.
+    target.dat = as.data.table(make_template_dat_cpp(tiled.target)) #useful to make a data.table for all the gMatrices going forward, this is defined on the tiling of the target so that we know exactly what the outputs will look like. Using a single "ID" column to refer to the pixels accelerates summation further on.
     setkeyv(target.dat,c('i','j'))
     #
     reference.intrachr = mclapply(1:length(walk.dts),function(ii){
@@ -95,9 +112,15 @@ simulate_walks_dt <- function(tiling.obj,if.comps=FALSE,mc.cores=1,if.sum=TRUE,d
     }else{
         out.dt = reference.intrachr 
     }
-    # then scale by depth
-    # then sum everything
-    return(out.dt)
+    if(if.sum){
+        total.counts = sum_matrices(out.dt)
+        return(gM(gr = tiled.target,dat=total.counts[,value:=depth*value]))
+    }else{
+        scaled_out = lapply(out.dt,function(x){
+            return(gM(gr=tiled.target,dat=x[,value:=depth*value]))
+        })
+        return(scaled_out)
+    }
 }
 
 simulate_hic_dt  <-  function(walk.dt,is.circular=FALSE,model=0){
@@ -279,33 +302,32 @@ simulate_hic  <-  function(gr,lookup_data,if.comps=FALSE,is.circular=FALSE,model
 }
 
 inter_allele_dt <- function(intra.dts,walk.dts,tiled.target,walk.cn,if.comps=F,mc.cores=1){
-#    cn.gr = input_graph$gr[,c('cn')]
-#    all.gr = gr.val(tiled.target,cn.gr,'cn')
-    target.dt = as.data.table(values(tiled.target))[,.(orig.id=tile.id,cn,compartment)]
+    target.dt = copy(tiled.target)[,.(orig.id=tile.id,cn,compartment)]
     template = data.table::copy(intra.dts[[1]])
     if (if.comps){
         lookup_interchr = fastKar::small_lookup[d<0]
-        template[,raw_density:=lookup_interchr[interaction==this.interaction]$tot_density,by=this.interaction]
+        template[,raw_density:=lookup_interchr[interaction==this.interaction]$tot_density/1500,by=this.interaction]
     }else{
         lookup_interchr = fastKar::small_lookup[d<0 & interaction=='same']
-        template[,raw_density:=lookup_interchr$tot_density]
+        raw_density = lookup_interchr$tot_density/1500
     }
     #
-    filled_matrices = mclapply(1:length(walk.dts),function(x){
+    filled_matrices = mclapply(1:length(walk.dts),function(x){ # i think there's a way to do this without looping
         this.walk = walk.dts[[x]][,my.cn:=.N,by=orig.id]
-        this.target = merge.data.table(target.dt,this.walk[,.(orig.id,my.cn)][1:10],by='orig.id',all.x=TRUE)[,my.cn:=ifelse(is.na(my.cn),0,my.cn)]
+        this.target = unique(merge.data.table(target.dt,this.walk[,.(orig.id,my.cn)],by='orig.id',all.x=TRUE)[,my.cn:=ifelse(is.na(my.cn),0,my.cn)])
         this.target[,other.cn:=cn-my.cn]
 
         mydat = data.table::copy(template)
-        mydat = merge.data.table(merge.data.table(mydat,this.target[,.(orig.id,my.cn)],by.x='i',by.y='orig.id'),this.target[,.(orig.id,other.cn)],by.x='j',by.y='orig.id')
+        mydat = unique(merge.data.table(mydat,this.target[,.(orig.id,other.cn)],by.x='j',by.y='orig.id',allow.cartesian=T))
+        mydat = unique(merge.data.table(mydat,this.target[,.(orig.id,my.cn)],by.x='i',by.y='orig.id',allow.cartesian=T))
         mydat[,cnprod:=ifelse(is.na(my.cn*other.cn),0,my.cn*other.cn)]
-        mydat[,value:=walk.cn*raw_density*cnprod*widthprod]
+        mydat[,value:=walk.cn[x]*raw_density*cnprod*widthprod]
         mydat[is.na(value),value:=0]
         # subtract CN of myself from the overall CN from jabba
         # then the number of counts for contact i-j is:
             # cts = (CN of i inside myself)*(CN of j in everyone else)*(p from the lookup table(AA/AB/BB))*(binwidth^2) 
         # add the interchromosomal gmat to my self-contact gmat
-        combdat = merge.data.table(mydat[,.(inter_value=value,id)],intra.dts[[x]][,.(i,j,intra_value=value,id)],by='id')[,value:=intra_value+inter_value]
+        combdat = merge.data.table(mydat[,.(inter_value=value,id)],intra.dts[[x]][,.(i,j,intra_value=value,id)],by='id',allow.cartesian=T)[,value:=intra_value+inter_value]
         out.dat = combdat[,.(i,j,id,value)]
         return(out.dat)
     },mc.cores=mc.cores)
@@ -363,11 +385,12 @@ sum_matrices <- function(matrices){
 make_template_dat <- function(target.bins,if.comps=FALSE){
     if(inherits(target.bins,'GRanges')){
         widths = width(target.bins) %>% as.numeric
+        l = length(target.bins)
     }else if(inherits(target.bins,'data.table')){
         widths = target.bins$width
+        l = nrow(target.bins)
     }
-    l = length(widths)
-    template.dat <- rbind(as.data.table(t(combn(l,2)))[,.(i=V1,j=V2)],data.table(i=1:l,j=1:l))[,value:=0]
+    template.dat = data.table(expand.grid(i=1:l,j=1:l))[j>=i][,value:=0]
     setkeyv(template.dat,c('i','j'))
     if(if.comps){
         target.bins[is.na(target.bins$compartment)]$compartment='A'
