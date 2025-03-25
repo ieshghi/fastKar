@@ -1,10 +1,5 @@
 # In this file I define some functions used in the prediction of 3D structure at rearrangements.
 
-#this branch will be for me to develop a version of the forward model which is tiling-ambiguous, with helper functions to re-do the tiling as in the old version
-
-#possible further optimizations:
-# - one of the bottleneck functions is matrix symmetrization. Can i just write cpp code to do the matmul,
-#   assuming a symmetric matrix (basically setting i<-->j when j<i)
 forward_simulate <- function(walks,target_region = NULL,pix.size=1e5,if.comps=FALSE,mc.cores=1,if.sum=TRUE,depth=1,model=0,if.interchr=T,gm.out=T){
     prepped.data = prep_for_sim(walks,target_region,pix.size,if.comps)
     return(simulate_walks(prepped.data$walks,prepped.data$tiled.target,prepped.data$widthdt,if.comps,mc.cores,if.sum,depth,model,if.interchr,gm.out))
