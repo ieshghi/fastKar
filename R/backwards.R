@@ -23,12 +23,8 @@ gg.to.wiring <- function(gg){
   # where are the loose edges?
   loose.subids = split.edgetable[type=='LOO']$subid %>% unique
   #split the nodes in the graph to half-nodes. This needs to be done only one time. Then, aggregate Hi-C data to those half-nodes.
-  nodesdt.split = nodesdt[cn>0][rep(1:.N,each=2)][,lr:=ifelse(mod(.I,2)==1,'l','r')][,.(start,end,seqnames,snode.id,cn,lr)][,width:=ifelse(lr=='l',floor((end-start+1)/2),ceil((end-start+1)/2))]
-  nodesdt.split[lr=='l',end:=start+width-1]
-  nodesdt.split[lr=='r',start:=end-width+1]
-  ref.splitnodes = nodesdt.split[,.(start,end,nodeid=paste0(abs(snode.id),lr),width,refid=.I)]
   internal.edges[,id:=.I]
-  return(list(internal.edges = internal.edges,loose.ends = loose.subids,gr.splitnodes=ref.splitnodes,gg=gg))
+  return(list(internal.edges = internal.edges,loose.ends = loose.subids,gg=gg))
 }
 
 # given a wiring, with internal edges and loose ends, traverse graph and return paths and cycles
@@ -286,7 +282,6 @@ cppFunction('List traverse_graph_cpp(DataFrame A, NumericVector loose_ends) {
 walks.from.edges <- function(wiring,shuffle=0,return.gw = FALSE,ifcpp=TRUE){ #wrapper function
   internal.edges = wiring$internal.edges
   loose.ends = wiring$loose.ends
-  gr.splitnodes = wiring$gr.splitnodes
   gg = wiring$gg
   edges = copy(internal.edges) 
   if (shuffle==1){
@@ -308,7 +303,9 @@ walks.from.edges <- function(wiring,shuffle=0,return.gw = FALSE,ifcpp=TRUE){ #wr
   if (return.gw){
     return(c(gW(graph=gg,snode.id=walks.out$paths),gW(graph=gg,snode.id=walks.out$cycles,circular=TRUE)))
   }else{
-    return(list(gg=gg,paths=walks.out$paths,cycles=walks.out$cycles))
+    circular = c(rep(F,length(walks.out$paths)),rep(T,length(walks.out$cycles)))
+    snode.id = c(walks.out$paths,walks.out$cycles)
+    return(list(graph=gg,snode.id=snode.id,circular=circular))
   }
   return(walks.out)
 }

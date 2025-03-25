@@ -31,11 +31,15 @@ forward_simulate <- function(walks,target_region = NULL,pix.size=1e5,if.comps=FA
     #now, tile target region, merging with node boundaries
     if (pix.size > 0){ #tiling mode
         tiled.target = gr2dt(gr.merge(gr.tile(target_region,pix.size),nodesgr))
+        tiled.target[,tile.id:=.I]
+        tiled.target = tiled.target[,.(start,end,seqnames,tile.id,width,node.id,cn)]
     } else{ # split node mode
-        # PUT STUFF HERE
+        targetnodes = gr2dt(gr.merge(target_region,nodesgr))
+        nodesdt.split = targetnodes[rep(1:.N,each=2)][,lr:=ifelse(mod(.I,2)==1,'l','r')][,.(start,end,seqnames,node.id,cn,lr)][,width:=ifelse(lr=='l',floor((end-start+1)/2),ceil((end-start+1)/2))]
+        nodesdt.split[lr=='l',end:=start+width-1]
+        nodesdt.split[lr=='r',start:=end-width+1]
+        tiled.target = nodesdt.split[,.(start,end,seqnames,node.id,width,cn)][,tile.id:=.I]
     }
-    tiled.target[,tile.id:=.I]
-    tiled.target = tiled.target[,.(start,end,seqnames,tile.id,width,node.id,cn)]
 
     #check for compartment data
     if (if.comps==FALSE){
@@ -339,7 +343,7 @@ inter_allele_dt <- function(intra.dts,walk.dts,tiled.target,walk.cn,if.comps=F,m
         nodecounts.dt[,tilecount:=tilecount*wcn]
         return((merge.data.table(target.dt,nodecounts.dt,by='orig.id',all.x=T)[is.na(tilecount),tilecount:=0]$tilecount))
     })))
-    mydat[,sum_sisj:=sum(walk_nodecounts[,i]*walk_nodecounts[,j]),by=id]
+    mydat[,sum_sisj :=colSums(walk_nodecounts[,i, drop = FALSE] * walk_nodecounts[,j, drop = FALSE])]
     mydat[,value:=widthprod*raw_density*(titj-sum_sisj)]
     intra_sum = sum_matrices(intra.dts)
     combdat = merge.data.table(mydat[,.(inter_value=value,id)],intra_sum[,.(i,j,intra_value=value,id)],by='id',allow.cartesian=T)[,value:=intra_value+inter_value]
