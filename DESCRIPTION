@@ -18,4 +18,6 @@ Imports:
     MASS,
     gUtils,
     ietools,
-    data.table
+    data.table,
+    parallel,
+    hashr
