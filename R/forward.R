@@ -2,7 +2,7 @@
 
 forward_simulate <- function(walks,target_region = NULL,pix.size=1e5,if.comps=FALSE,mc.cores=1,if.sum=TRUE,depth=1,model=0,if.interchr=T,gm.out=T){
     prepped.data = prep_for_sim(walks,target_region,pix.size,if.comps)
-    return(simulate_walks(prepped.data$walks,prepped.data$tiled.target,prepped.data$widthdt,if.comps,mc.cores,if.sum,depth,model,if.interchr,gm.out))
+    return(simulate_walks(walks,prepped.data$tiled.target,prepped.data$widthdt,if.comps,mc.cores,if.sum,depth,model,if.interchr,gm.out))
 }
 
 prep_for_sim <- function(walks,target_region=NULL,pix.size=1e5,if.comps=F){
@@ -46,7 +46,7 @@ prep_for_sim <- function(walks,target_region=NULL,pix.size=1e5,if.comps=F){
         comps.gr = gr.nochr(fastKar::compartment_lookup)
         tiled.target = eval_comps(gr.tile(target_region,pix.size),comps.gr) #need to update eval_comps to dt mode
     }
-    return(list(walks = walks,tiled.target=tiled.target,widthdt=widthdt))
+    return(list(tiled.target=tiled.target,widthdt=widthdt))
 }
 
 simulate_walks <- function(walks,tiled.target,widthdt,if.comps=F,mc.cores=1,if.sum=T,depth=1,model=0,if.interchr=T,gm.out=T){

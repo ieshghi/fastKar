@@ -3,6 +3,48 @@
 #goes from a ggraph to a "wiring", which gives all the internal edges of the graph (going from left side of a node to right side)
 #along with the loose node ids and a reference data table with the new node ids (all copies of each node are de-duplicated)
 
+infer.walks <- function(graph,hic.data,bias=0,mc.cores=1,return.vals='walks',num.iter=100){
+  wiring = gg.to.wiring(gg) #make a wiring object
+  init_walk = walks.from.edges(wiring) #start at a random first walk decomposition
+  prepped.data = prep_for_sim(init_walk,pix.size=0) #some tiling and prep information
+  init_sim = simulate_walks(init_walk,prepped.data$tiled.target,prepped.data$widthdt,gm.out=T) #get an initial gMatrix from the initial walkset
+  hic.data.rebin = (hic.data$disjoin(init_sim$gr))$agg(init_sim$gr)
+  browser()
+
+  eps = compdats(hic.data.rebin$dat,init_sim$dat,theta=2)
+  hashhist = c(init_walk$decomp.hash)
+  epshist = c(eps)
+  cts = 0
+  pb = txtProgressBar(min=0,max=num.iter,initial=0)
+  for(cts in 1:num.iter){
+    setTxtProgressBar(pb,cts)
+    if (bias==0){
+      newwalk = walks.from.edges(wiring,shuffle=1)
+    } else{
+      stop('Biasing methods not implemented yet.')
+    }
+    thishash = newwalk$decomp.hash
+    if(thishash %in% hashhist){
+      firsttime = which(hashhist==thishash)[1]
+      eps = epshist[firsttime]
+    } else{
+      newsim = simulate_walks(newwalk,prepped.data$tiled.target,prepped.data$widthdt,gm.out=F)
+      eps = compdats(hic.data.rebin$dat,newsim$dat,theta=2)
+    }
+    if(eps < min(epshist)){
+      bestwalk = newwalk
+    }
+    epshist = c(epshist,eps)
+    hashhist = c(hashhist,thishash)
+  }
+  close(pb)
+  if(return.vals=='walks'){
+    return(bestwalk)
+  }else if(return.vals=='all'){
+    return(list(walks = bestwalk,losshist = epshist,hashhist = hashhist))
+  }
+}
+
 gg.to.wiring <- function(gg){ 
   nodesdt = gg$nodes$dt[,.(start,end,seqnames,snode.id,cn,loose.cn.left,loose.cn.right)]
   nodesgr = gg$nodes$gr[,c('snode.id','cn')]
@@ -283,7 +325,7 @@ walks.from.edges <- function(wiring,shuffle=0,return.gw = FALSE,ifcpp=TRUE){ #wr
   internal.edges = wiring$internal.edges
   loose.ends = wiring$loose.ends
   gg = wiring$gg
-  edges = copy(internal.edges) 
+  edges = data.table::copy(internal.edges) 
   if (shuffle==1){
     edges[,right:=ifelse(cn>1,sample(right,unique(cn)),right),by=n] #shuffle rewiring
   } else if (shuffle==2){
@@ -296,16 +338,17 @@ walks.from.edges <- function(wiring,shuffle=0,return.gw = FALSE,ifcpp=TRUE){ #wr
     edges[,right:=ifelse(is.na(sright),right,sright)][,sright:=NULL]
   }
   if (ifcpp){
-    walks.out = traverse_graph_cpp(internal.edges,loose.ends)
+    walks.out = traverse_graph_cpp(edges,loose.ends)
   } else{
-    walks.out = traverse_graph(internal.edges,loose.ends)
+    walks.out = traverse_graph(edges,loose.ends)
   }
   if (return.gw){
-    return(c(gW(graph=gg,snode.id=walks.out$paths),gW(graph=gg,snode.id=walks.out$cycles,circular=TRUE)))
+    walks_out = c(gW(graph=gg,snode.id=walks.out$paths),gW(graph=gg,snode.id=walks.out$cycles,circular=TRUE))
   }else{
     circular = c(rep(F,length(walks.out$paths)),rep(T,length(walks.out$cycles)))
     snode.id = c(walks.out$paths,walks.out$cycles)
-    return(list(graph=gg,snode.id=snode.id,circular=circular))
+    decomp.hash = hash(edges$right)
+    walks.out = list(graph=gg,snode.id=snode.id,circular=circular,decomp.hash = decomp.hash)
   }
   return(walks.out)
 }
