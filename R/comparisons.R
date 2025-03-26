@@ -30,7 +30,7 @@ test.walks.with.hic <- function(walkset,hic.data,resolution=1e5,mc.cores=1,targe
     }
     depth.est = estimate.depthratio(hic.data,resolution)
     predictions = mclapply(walkset,function(w){
-        return(run_analysis(w,target_region=target_region,if.comps=F,pix.size=resolution,mc.cores=1,verbose=F,if.sum=T,depth=depth.est,model=0))
+        return(forward_simulate(w,target_region=target_region,if.comps=F,pix.size=resolution,mc.cores=1,verbose=F,if.sum=T,depth=depth.est,model=0))
     },mc.cores=mc.cores)
     rebin.data = (hic.data$disjoin(predictions[[1]]$gr))$agg(predictions[[1]]$gr) #make sure data is aggregated on the same GRanges as the predictions
 
@@ -86,8 +86,8 @@ estimate.depthratio <- function(hic.data,res,ifplot=FALSE){ #put here hic data i
   dat[,source:='skov3']
   dat[,tot_density:=mean(value/res^2,na.rm=TRUE),by=d]
   dat = unique(dat[d>=res & d<=1e7,.(d,tot_density,source)])
-  est = dat[d==1e5]$tot_density/mean(lookup.data[d==1e5]$tot_density)
-  return(est)
+  est = dat[d==1e5]$tot_density/mean(lookup.data[d==1e5]$tot_density) #gets ratio between counts in reference data (1500x) and provided data
+  return(1500*est)
 }
 
 compdats <- function(dat_test,dat_true,theta=0,ifscale=FALSE,ifsum=TRUE,checkinds=TRUE,if.diag=TRUE){
