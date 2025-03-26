@@ -3,14 +3,16 @@
 #goes from a ggraph to a "wiring", which gives all the internal edges of the graph (going from left side of a node to right side)
 #along with the loose node ids and a reference data table with the new node ids (all copies of each node are de-duplicated)
 
-infer.walks <- function(graph,hic.data,bias=0,mc.cores=1,return.vals='walks',num.iter=100){
-  wiring = gg.to.wiring(gg) #make a wiring object
-  init_walk = walks.from.edges(wiring) #start at a random first walk decomposition
-  prepped.data = prep_for_sim(init_walk,pix.size=0) #some tiling and prep information
+infer.walks.stupidly <- function(graph,hic.data,init_walk = NULL,return.vals='walks',num.iter=100,pix.size=0){
+  wiring = gg.to.wiring(graph) #make a wiring object
+  if(is.null(init_walk)){
+    init_walk = walks.from.edges(wiring,1) #start at a random first walk decomposition
+  }
+  prepped.data = prep_for_sim(init_walk,pix.size=pix.size) #some tiling and prep information
   init_sim = simulate_walks(init_walk,prepped.data$tiled.target,prepped.data$widthdt,gm.out=T) #get an initial gMatrix from the initial walkset
   hic.data.rebin = (hic.data$disjoin(init_sim$gr))$agg(init_sim$gr)
-  browser()
 
+  bestwalk = init_walk
   eps = compdats(hic.data.rebin$dat,init_sim$dat,theta=2)
   hashhist = c(init_walk$decomp.hash)
   epshist = c(eps)
@@ -18,11 +20,7 @@ infer.walks <- function(graph,hic.data,bias=0,mc.cores=1,return.vals='walks',num
   pb = txtProgressBar(min=0,max=num.iter,initial=0)
   for(cts in 1:num.iter){
     setTxtProgressBar(pb,cts)
-    if (bias==0){
-      newwalk = walks.from.edges(wiring,shuffle=1)
-    } else{
-      stop('Biasing methods not implemented yet.')
-    }
+    newwalk = walks.from.edges(wiring,shuffle=1)
     thishash = newwalk$decomp.hash
     if(thishash %in% hashhist){
       firsttime = which(hashhist==thishash)[1]
@@ -39,7 +37,7 @@ infer.walks <- function(graph,hic.data,bias=0,mc.cores=1,return.vals='walks',num
   }
   close(pb)
   if(return.vals=='walks'){
-    return(bestwalk)
+    return(bestwalk$snode.id)
   }else if(return.vals=='all'){
     return(list(walks = bestwalk,losshist = epshist,hashhist = hashhist))
   }
@@ -53,8 +51,8 @@ gg.to.wiring <- function(gg){
   nodesdt[is.na(loose.cn.right),loose.cn.right:=cn]
   nodesdt[is.na(loose.cn.left),loose.cn.left:=cn] #adjusting CN at chromosome ends
   # separate left and right loose ends and label them appropriately as edges going to node "0", before adding them to the total set of external edges
-  left.looseedges = nodesdt[loose.cn.left>0][,.(n2=snode.id,cn = loose.cn.left,n2.side='left',n1=0,n1.side='right')]
-  right.looseedges = nodesdt[loose.cn.right>0][,.(n1=snode.id,cn = loose.cn.right,n2.side='left',n2=0,n1.side='right')]
+  left.looseedges = copy(nodesdt)[loose.cn.left>0][,.(n2=snode.id,cn = loose.cn.left,n2.side='left',n1=0,n1.side='right')]
+  right.looseedges = copy(nodesdt)[loose.cn.right>0][,.(n1=snode.id,cn = loose.cn.right,n2.side='left',n2=0,n1.side='right')]
   external.edges = rbind(edgesdt,rbind(left.looseedges,right.looseedges)[,type:='LOO'][,.(cn,n1,n2,n1.side,n2.side,type)])
   dedup.edges = external.edges[rep(1:.N,cn)][,.(n1,n2,n1.side,n2.side,type)] #separate all copies of all edges
   split.edgetable = melt.data.table(dedup.edges[,.(n1=paste0(n1,substr(n1.side,1,1)),n2=paste0(n2,substr(n2.side,1,1)),subid=.I,type)],id=c('subid','type'))[,.(subid,n=value,type)] #separate all edges and label them with a unique ID "subid"
