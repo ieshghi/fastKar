@@ -79,7 +79,7 @@ ensemble_compmaps <- function(map_test,map_true,n=100,theta=0,ifscale=FALSE,if.d
     }
 }
 
-estimate.depthratio <- function(hic.data,res,ifplot=FALSE){ #put here hic data in a non-rearranged place. Estimates the depth ratio between this data and the reference data
+estimate.depthratio <- function(hic.data,res=1e5){ #put here hic data in a non-rearranged place. Estimates the depth ratio between this data and the reference data
   lookup.data = fastKar::small_lookup
   dat = hic.data$dat[i!=j]
   dat[,d:=res*(j-i)]

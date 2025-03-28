@@ -1,48 +1,77 @@
 # this file contains the tools necessary for performing inference on graphs
 
-#goes from a ggraph to a "wiring", which gives all the internal edges of the graph (going from left side of a node to right side)
-#along with the loose node ids and a reference data table with the new node ids (all copies of each node are de-duplicated)
 
-infer.walks.stupidly <- function(graph,hic.data,init_walk = NULL,return.vals='walks',num.iter=100,pix.size=0){
+#TODO for all inference methods: make some hashing method so that user can look at all the sampled walk sets and their respective NLLs
+#maybe write a method to preprocess hic data and estimate depth...?
+infer.walks <- function(graph,hic.data,depth,stepping_mode='dumb',init_walk = NULL,return.vals='walks',num.iter=100,pix.size=0){
   wiring = gg.to.wiring(graph) #make a wiring object
   if(is.null(init_walk)){
     init_walk = walks.from.edges(wiring,1) #start at a random first walk decomposition
   }
   prepped.data = prep_for_sim(init_walk,pix.size=pix.size) #some tiling and prep information
-  init_sim = simulate_walks(init_walk,prepped.data$tiled.target,prepped.data$widthdt,gm.out=T) #get an initial gMatrix from the initial walkset
+  init_sim = simulate_walks(init_walk,prepped.data$tiled.target,prepped.data$widthdt,depth=depth,gm.out=T) #get an initial gMatrix from the initial walkset
   hic.data.rebin = (hic.data$disjoin(init_sim$gr))$agg(init_sim$gr)
+  hashlookup = new.env(hash = TRUE, parent = emptyenv()) #initialize environment to store walk hashes
 
   bestwalk = init_walk
-  eps = compdats(hic.data.rebin$dat,init_sim$dat,theta=2)
-  hashhist = c(init_walk$decomp.hash)
-  epshist = c(eps)
+  init_loss = compdats(hic.data.rebin$dat,init_sim$dat,theta=2)
+  init_hash = digest(init_walk, algo = "sha256")
+  assign(init_hash, init_walk, envir = hashlookup) 
+  walkhist = data.table(losses=init_loss,hashes=init_hash)
   cts = 0
   pb = txtProgressBar(min=0,max=num.iter,initial=0)
   for(cts in 1:num.iter){
     setTxtProgressBar(pb,cts)
-    newwalk = walks.from.edges(wiring,shuffle=1)
-    thishash = newwalk$decomp.hash
-    if(thishash %in% hashhist){
-      firsttime = which(hashhist==thishash)[1]
-      eps = epshist[firsttime]
-    } else{
-      newsim = simulate_walks(newwalk,prepped.data$tiled.target,prepped.data$widthdt,gm.out=F)
-      eps = compdats(hic.data.rebin$dat,newsim$dat,theta=2)
+    if (stepping_mode=='dumb'){ #dumb = just pick a random new walk
+      newwalk = walks.from.edges(wiring,shuffle=1)
+      loss_and_hash = get_or_calc_loss(newwalk,hic.data.rebin,prepped.data,depth,walkhist,hashlookup)
+      thisloss = loss_and_hash$thisloss
+      thishash = loss_and_hash$thisloss
+    } else if (stepping_mode=='metrop'){ #something like a metropolis
+      proposal = walks.from.edges(wiring,shuffle=2) #assume all walks "one move away" are equally likely, and all other walks are p=0
+      prop_calc = get_or_calc_loss(proposal,hic.data.rebin,prepped.data,depth,walkhist,hashlookup)
+      oldloss = walkhist[cts-1]$losses
+      proploss = prop_calc$thisloss
+      acc_prob = min(1,exp(-proploss + oldloss))
+      if (as.numeric(rand()) < acc_prob){ #metropolis-like condition: if you're doing better, move forward with some probability
+        thisloss = proploss
+        thishash = prop_calc$thishash 
+        newwalk = proposal
+      } else{ #otherwise, stay where you are
+        thisloss = oldloss
+        thishash = walkhist[cts-1]$hashes
+      }
+    } else if (stepping_mode== 'guided'){
+      # do smart stuff here
     }
-    if(eps < min(epshist)){
+    if(thisloss < min(walkhist$losses)){
       bestwalk = newwalk
     }
-    epshist = c(epshist,eps)
-    hashhist = c(hashhist,thishash)
+    walkhist = rbind(walkhist,data.table(losses=thisloss,hashes=thishash))
   }
   close(pb)
   if(return.vals=='walks'){
-    return(bestwalk$snode.id)
+    return(bestwalk)
   }else if(return.vals=='all'){
-    return(list(walks = bestwalk,losshist = epshist,hashhist = hashhist))
+    return(list(bestwalk = bestwalk,walkhist=walkhist,hashlookup=hashlookup))
   }
 }
 
+get_or_calc_loss <- function(newwalk,hic.data.rebin,prepped.data,depth,walkhist,hashlookup){
+    thishash = digest(newwalk, algo='sha256')
+    if(thishash %in% walkhist$hashes){
+      firsttime = which((walkhist$hashes)==thishash)[1]
+      thisloss = walkhist[firsttime]$losses
+    } else{
+      newsim = simulate_walks(newwalk,prepped.data$tiled.target,prepped.data$widthdt,depth=depth,gm.out=F)
+      thisloss = compdats(hic.data.rebin$dat,newsim$dat,theta=2)
+      assign(thishash,newwalk,envir=hashlookup)
+    }
+    return(list(thisloss = thisloss,thishash=thishash))
+}
+
+#goes from a ggraph to a "wiring", which gives all the internal edges of the graph (going from left side of a node to right side)
+#along with the loose node ids and a reference data table with the new node ids (all copies of each node are de-duplicated)
 gg.to.wiring <- function(gg){ 
   nodesdt = gg$nodes$dt[,.(start,end,seqnames,snode.id,cn,loose.cn.left,loose.cn.right)]
   nodesgr = gg$nodes$gr[,c('snode.id','cn')]
@@ -319,6 +348,7 @@ cppFunction('List traverse_graph_cpp(DataFrame A, NumericVector loose_ends) {
 }
 ')
 
+# one possible addition: check for identical walks and de-dup them, return walk.cn
 walks.from.edges <- function(wiring,shuffle=0,return.gw = FALSE,ifcpp=TRUE){ #wrapper function
   internal.edges = wiring$internal.edges
   loose.ends = wiring$loose.ends
@@ -345,8 +375,7 @@ walks.from.edges <- function(wiring,shuffle=0,return.gw = FALSE,ifcpp=TRUE){ #wr
   }else{
     circular = c(rep(F,length(walks.out$paths)),rep(T,length(walks.out$cycles)))
     snode.id = c(walks.out$paths,walks.out$cycles)
-    decomp.hash = hash(edges$right)
-    walks.out = list(graph=gg,snode.id=snode.id,circular=circular,decomp.hash = decomp.hash)
+    walks.out = list(graph=gg,snode.id=snode.id,circular=circular)
   }
   return(walks.out)
 }

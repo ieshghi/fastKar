@@ -20,5 +20,5 @@ Imports:
     ietools,
     data.table,
     parallel,
-    hashr,
-    Rcpp
+    Rcpp,
+    digest
