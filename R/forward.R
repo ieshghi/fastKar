@@ -1,10 +1,29 @@
 # In this file I define some functions used in the prediction of 3D structure at rearrangements.
-
+#' Simulate the Hi-C data of a set of gWalks in reference coordinates using the fastKar framework
+#' 
+#' @param walks either a gGnome::gWalk or a list containing objects "graph" (a gGnome gGraph), "snode.id" (a list of arrays of node.ids inside "graph" in their walk order), and "circular" (an array of booleans indicating the circularity of the walks)
+#' @param target_region a gRange corresponding to the region of interest for the simulation. If left blank, assume the footprint of the walks.
+#' @param pix.size resolution of the simulation tiles, default is 100kb. If set to 0, each tile corresponds to half a node in the gGraph.
+#' @param if.comps boolean setting whether or not to simulate compartments (defaults to FALSE)
+#' @param mc.cores number of cores to use in parallel simulation (defaults to 1)
+#' @param if.sum boolean deciding whether to sum the simulated Hi-C signal from all walks or whether to return a list of Hi-C maps (defaults to TRUE)
+#' @param depth depth of the simulated Hi-C data, in X coverage (defaults to 1)
+#' @param model sets whether to simulate Hi-C (model = 0) or long-read data (model = length of reads in bp)
+#' @param if.interchr boolean, sets whether to simulate interchromosomal contacts (default is TRUE). If if.sum = FALSE, then this is set to FALSE. 
+#' @param gm.out boolean, chooses whether to return a gMatrix or a data.table (defaults to TRUE, returning a gMatrtix)
+#' @return either a gMatrix (gm.out = if.sum = T), a list of gMatrices (gm.out = T, if.sum = F), a data.table (gm.out = F, if.sum = T), or a list of data.tables (gm.out = if.sum = F)
 forward_simulate <- function(walks,target_region = NULL,pix.size=1e5,if.comps=FALSE,mc.cores=1,if.sum=TRUE,depth=1,model=0,if.interchr=T,gm.out=T){
     prepped.data = prep_for_sim(walks,target_region,pix.size,if.comps)
     return(simulate_walks(walks,prepped.data$tiled.target,prepped.data$widthdt,if.comps,mc.cores,if.sum,depth,model,if.interchr,gm.out))
 }
 
+#' Tile target region and prepare data necessary for Hi-C simulation. 
+#'
+#' @param walks either a gGnome::gWalk or a list containing objects "graph" (a gGnome gGraph), "snode.id" (a list of arrays of node.ids inside "graph" in their walk order), and "circular" (an array of booleans indicating the circularity of the walks)
+#' @param target_region a gRange corresponding to the region of interest for the simulation. If left blank, assume the footprint of the walks.
+#' @param pix.size resolution of the simulation tiles, default is 100kb. If set to 0, each tile corresponds to half a node in the gGraph.
+#' @param if.comps boolean setting whether or not to simulate compartments (defaults to FALSE)
+#' @return a list with two elements: "tiled.target", a data.table containing the tiles, their coordinates, and compartment identity, and "widthdt", a data.table containing the widths of all nodes from the input gGraph
 prep_for_sim <- function(walks,target_region=NULL,pix.size=1e5,if.comps=F){
     #first, get nodes from graph
     if (is.null(walks$graph) | is.null(walks$graph$gr$cn)){
@@ -31,10 +50,10 @@ prep_for_sim <- function(walks,target_region=NULL,pix.size=1e5,if.comps=F){
         tiled.target = tiled.target[,.(start,end,seqnames,tile.id,width,node.id,cn)]
     } else{ # split node mode: tiles have variable size, each node is just two tiles
         targetnodes = gr2dt(gr.merge(target_region,nodesgr))
-        nodesdt.split = targetnodes[rep(1:.N,each=2)][,lr:=ifelse(mod(.I,2)==1,'l','r')][,.(start,end,seqnames,node.id,cn,lr)][,width:=ifelse(lr=='l',floor((end-start+1)/2),ceil((end-start+1)/2))]
-        nodesdt.split[lr=='l',end:=start+width-1]
-        nodesdt.split[lr=='r',start:=end-width+1]
-        tiled.target = nodesdt.split[,.(start,end,seqnames,node.id,width,cn)][,tile.id:=.I]
+        nodesdt.split = targetnodes[rep(1:.N,each=2)][,side:=ifelse(mod(.I,2)==1,'left','right')][,.(start,end,seqnames,node.id,cn,side)][,width:=ifelse(side=='left',floor((end-start+1)/2),ceil((end-start+1)/2))]
+        nodesdt.split[side=='left',end:=start+width-1]
+        nodesdt.split[side=='right',start:=end-width+1]
+        tiled.target = nodesdt.split[,.(start,end,seqnames,node.id,side,width,cn)][,tile.id:=.I]
     }
 
     #check for compartment data
@@ -49,6 +68,19 @@ prep_for_sim <- function(walks,target_region=NULL,pix.size=1e5,if.comps=F){
     return(list(tiled.target=tiled.target,widthdt=widthdt))
 }
 
+#' Downstream of prep_for_sim, calculate Hi-C data in reference coordinates given sets of walks on a graph and a tiled target region
+#' 
+#' @param walks either a gGnome::gWalk or a list containing objects "graph" (a gGnome gGraph), "snode.id" (a list of arrays of node.ids inside "graph" in their walk order), and "circular" (an array of booleans indicating the circularity of the walks)
+#' @param tiled.target a data.table produced by prep_for_sim(), containing target tile coordinates, tile.ids, and corresponding node.ids, as well as CN and width
+#' @param widthdt a data.table produced by prep_for_sim(), containing width data for all the nodes in the gGraph simulated here.
+#' @param if.comps boolean setting whether or not to simulate compartments (defaults to FALSE)
+#' @param mc.cores number of cores to use in parallel simulation (defaults to 1)
+#' @param if.sum boolean deciding whether to sum the simulated Hi-C signal from all walks or whether to return a list of Hi-C maps (defaults to TRUE)
+#' @param depth depth of the simulated Hi-C data, in X coverage (defaults to 1)
+#' @param model sets whether to simulate Hi-C (model = 0) or long-read data (model = length of reads in bp)
+#' @param if.interchr boolean, sets whether to simulate interchromosomal contacts (default is TRUE). If if.sum = FALSE, then this is set to FALSE. 
+#' @param gm.out boolean, chooses whether to return a gMatrix or a data.table (defaults to TRUE, returning a gMatrtix)
+#' @return either a gMatrix (gm.out = if.sum = T), a list of gMatrices (gm.out = T, if.sum = F), a data.table (gm.out = F, if.sum = T), or a list of data.tables (gm.out = if.sum = F)
 simulate_walks <- function(walks,tiled.target,widthdt,if.comps=F,mc.cores=1,if.sum=T,depth=1,model=0,if.interchr=T,gm.out=T){
     # walks is either a gWalk object or a list with elements: snode.id, circular
     # tiled.target is a gr2dt with metadata columns of tile.id, node.id, and cn
@@ -130,6 +162,12 @@ simulate_walks <- function(walks,tiled.target,widthdt,if.comps=F,mc.cores=1,if.s
     }
 }
 
+#' Simulate Hi-C data using spline trained on Rao 2014 data
+#' 
+#' @param walk.dt data.table prepared by simulate_walks(), each row is a tile to simulate and columns are start,end,midpoints of the tile in local walk coordinates.
+#' @param is.circular boolean indicating whether the walk is circular or not (defaults to FALSE)
+#' @param model sets whether to simulate Hi-C (model = 0) or long-read data (model = length of reads in bp)
+#' @return data.table of long-format gMatrix with columns i,j,id,value
 simulate_map<-  function(walk.dt,is.circular=FALSE,model=0){
     dat.new = as.data.table(make_template_dat_cpp(walk.dt))
     if (is.circular){
@@ -155,6 +193,9 @@ simulate_map<-  function(walk.dt,is.circular=FALSE,model=0){
    return(dat.new[,.(i,j,value,id)])
 }
 
+#' Evaluate compartment identity of all tiles
+#' 
+#' TO BE UPDATED, CURRENTLY DEPRECATED
 eval_comps <- function(tiled.walk,comps.gr=NULL){
     nbin = length(tiled.walk)
     if (is.null(comps.gr)){
@@ -172,6 +213,14 @@ eval_comps <- function(tiled.walk,comps.gr=NULL){
     return(tiled.walk)
 }
 
+#' Calculate inter-chromosomal contacts given walks using one-shot formula
+#' 
+#' @param intra.dts list of data.tables of intra-chromosomal contacts for each walk, generated by simulate_map
+#' @param walk.dts list of data.tables corresponding to each walk, with at least one column orig.id
+#' @param tiled.target data.table of target region tiles and their coordinates, given by prep_for_sim()
+#' @param walk.cn array giving the CN of each walk in walk.dts
+#' @param if.comps boolean, whether or not to consider compartments (defaults to FALSE)
+#' @return single data.table corresponding to the total contacts in the target region including both intra- and inter-chromosomal contacts
 calculate_interchrom <- function(intra.dts,walk.dts,tiled.target,walk.cn,if.comps=F,mc.cores=1,if.fast=T){
     target.dt = copy(tiled.target)[,.(orig.id=tile.id,cn,compartment)]
     template = data.table::copy(intra.dts[[1]])
@@ -199,6 +248,11 @@ calculate_interchrom <- function(intra.dts,walk.dts,tiled.target,walk.cn,if.comp
     return(combdat[,.(i,j,id,value)])
 }
 
+#' Sums the contacts coming from many gMatrix data.tables as fast as possible using the 'id' column. 
+#' 
+#' @param matrices list of data.tables of long-form gMatrices with columns i,j,id,value
+#' @return single data.table with same columns, with value column corresponding to the sum of all inputs for a given id
+#' NOTE: could be sped up with cpp
 sum_matrices <- function(matrices){
     allmats = do.call(rbind,matrices)
     allmats[,sumval:=sum(value),by='id']
@@ -206,6 +260,10 @@ sum_matrices <- function(matrices){
     return(outmat)
 }
 
+#' Given a set of bins, make the gMatrix data.table corresponding to all pairwise contacts for those bins
+#' 
+#' @param target.bins either a GRanges, or a data.table. If DT, must have a column "width", giving the width of all the bins
+#' @return data.table with columns i,j,id,widthprod corresponding to all pairwise contacts, widthprod is the product of widths of tiles i and j
 make_template_dat <- function(target.bins,if.comps=FALSE){
     if(inherits(target.bins,'GRanges')){
         widths = width(target.bins) %>% as.numeric
@@ -230,7 +288,10 @@ make_template_dat <- function(target.bins,if.comps=FALSE){
     return(template.dat)
 }
 
-#Rcpp version of the above, no compartments for now
+#' Rcpp version of make_template_dat(), no compartments for now
+#' 
+#' @param A a data.table corresponding to the target region tiles, with a "width" column giving the size of each tile
+#' @return data.table with columns i,j,id,widthprod corresponding to all pairwise contacts, widthprod is the product of widths of tiles i and j
 cppFunction('DataFrame make_template_dat_cpp(DataFrame A) {
   NumericVector widths = A["width"];
   int l = widths.size();
@@ -253,6 +314,11 @@ cppFunction('DataFrame make_template_dat_cpp(DataFrame A) {
   );
 }')
 
+#' Symmetrize a matrix
+#' 
+#' @param input.mat some input matrix, must be square
+#' @return matrix of the same shape as input.mat, with same diagonal, and non-diagonal being sum of matrix and its transpose
+#' NOTE: could be sped up with cpp
 symmetrize <- function(input.mat){
     output.mat = input.mat + Matrix::t(input.mat)
     Matrix::diag(output.mat) = Matrix::diag(input.mat)

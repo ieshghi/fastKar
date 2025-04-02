@@ -1,9 +1,6 @@
-# this file contains the tools necessary for performing inference on graphs
-
-
 #TODO for all inference methods: make some hashing method so that user can look at all the sampled walk sets and their respective NLLs
 #maybe write a method to preprocess hic data and estimate depth...?
-infer.walks <- function(graph,hic.data,depth,stepping_mode='dumb',init_walk = NULL,return.vals='walks',num.iter=100,pix.size=0){
+infer.walks <- function(graph,hic.data,depth,stepping_mode='dumb',temperature=1,init_walk = NULL,return.vals='walks',num.iter=100,pix.size=0){
   wiring = gg.to.wiring(graph) #make a wiring object
   if(is.null(init_walk)){
     init_walk = walks.from.edges(wiring,1) #start at a random first walk decomposition
@@ -32,7 +29,7 @@ infer.walks <- function(graph,hic.data,depth,stepping_mode='dumb',init_walk = NU
       prop_calc = get_or_calc_loss(proposal,hic.data.rebin,prepped.data,depth,walkhist,hashlookup)
       oldloss = walkhist[cts-1]$losses
       proploss = prop_calc$thisloss
-      acc_prob = min(1,exp(-proploss + oldloss))
+      acc_prob = min(1,exp((-proploss + oldloss)/temperature))
       if (as.numeric(rand()) < acc_prob){ #metropolis-like condition: if you're doing better, move forward with some probability
         thisloss = proploss
         thishash = prop_calc$thishash 
@@ -349,13 +346,13 @@ cppFunction('List traverse_graph_cpp(DataFrame A, NumericVector loose_ends) {
 ')
 
 # one possible addition: check for identical walks and de-dup them, return walk.cn
-walks.from.edges <- function(wiring,shuffle=0,return.gw = FALSE,ifcpp=TRUE){ #wrapper function
+walks.from.edges <- function(wiring,shuffle=0,return.gw = FALSE,ifcpp=TRUE,return_edges=F){ #wrapper function
   internal.edges = wiring$internal.edges
   loose.ends = wiring$loose.ends
   gg = wiring$gg
   edges = data.table::copy(internal.edges) 
   if (shuffle==1){
-    edges[,right:=ifelse(cn>1,sample(right,unique(cn)),right),by=n] #shuffle rewiring
+    edges[,right:=ifelse(cn>1,sample(right,size=unique(cn)),right),by=n] #shuffle rewiring
   } else if (shuffle==2){
     nswap = sample(edges[cn>1]$n,1)
     edges[n==nswap,sright:=sample(right,unique(cn))]
@@ -377,5 +374,15 @@ walks.from.edges <- function(wiring,shuffle=0,return.gw = FALSE,ifcpp=TRUE){ #wr
     snode.id = c(walks.out$paths,walks.out$cycles)
     walks.out = list(graph=gg,snode.id=snode.id,circular=circular)
   }
-  return(walks.out)
+  if(return_edges){
+    return(list(walks = walks.out,edges=edges))
+  }else{
+    return(walks.out)
+  }
+}
+
+sample_nlls <- function(nll_vals) {
+  liks = exp(-nll_vals)
+  probs = liks/sum(liks)
+  return(sample(1:length(probs),size=1,prob=probs))
 }

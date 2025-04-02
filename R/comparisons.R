@@ -117,6 +117,7 @@ compdats <- function(dat_test,dat_true,theta=0,ifscale=FALSE,ifsum=TRUE,checkind
         return(combdat[,.(value=-logprob,i,j,id)])
     }
 }
+
 make_noisymap <- function(map_in,theta=0,num.copies=1,mc.cores=20){
     dats = make_noisydat(map_in,num.copies,theta)
     out.maps = mclapply(dats,function(i){gM(gr=map_in$gr,dat=i)},mc.cores=mc.cores)
