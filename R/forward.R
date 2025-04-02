@@ -31,10 +31,10 @@ prep_for_sim <- function(walks,target_region=NULL,pix.size=1e5,if.comps=F){
         tiled.target = tiled.target[,.(start,end,seqnames,tile.id,width,node.id,cn)]
     } else{ # split node mode: tiles have variable size, each node is just two tiles
         targetnodes = gr2dt(gr.merge(target_region,nodesgr))
-        nodesdt.split = targetnodes[rep(1:.N,each=2)][,lr:=ifelse(mod(.I,2)==1,'l','r')][,.(start,end,seqnames,node.id,cn,lr)][,width:=ifelse(lr=='l',floor((end-start+1)/2),ceil((end-start+1)/2))]
-        nodesdt.split[lr=='l',end:=start+width-1]
-        nodesdt.split[lr=='r',start:=end-width+1]
-        tiled.target = nodesdt.split[,.(start,end,seqnames,node.id,width,cn)][,tile.id:=.I]
+        nodesdt.split = targetnodes[rep(1:.N,each=2)][,side:=ifelse(mod(.I,2)==1,'left','right')][,.(start,end,seqnames,node.id,cn,side)][,width:=ifelse(side=='left',floor((end-start+1)/2),ceil((end-start+1)/2))]
+        nodesdt.split[side=='left',end:=start+width-1]
+        nodesdt.split[side=='right',start:=end-width+1]
+        tiled.target = nodesdt.split[,.(start,end,seqnames,node.id,side,width,cn)][,tile.id:=.I]
     }
 
     #check for compartment data
