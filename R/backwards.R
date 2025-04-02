@@ -1,6 +1,3 @@
-# this file contains the tools necessary for performing inference on graphs
-
-
 #TODO for all inference methods: make some hashing method so that user can look at all the sampled walk sets and their respective NLLs
 #maybe write a method to preprocess hic data and estimate depth...?
 infer.walks <- function(graph,hic.data,depth,stepping_mode='dumb',temperature=1,init_walk = NULL,return.vals='walks',num.iter=100,pix.size=0){

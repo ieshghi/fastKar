@@ -1,11 +1,3 @@
-# this file contains some basic tests for the fastKar package
-
-test_fastKar_forward <- function(){
-  somewalks = makerepdup(1e5,'cis1')
-  gmats = run_analysis(somewalks,pix.size=1e4,mc.cores=3)
-  return(gmats)
-}
-
 gimme_bfb <- function(w,n,cycles=5){
   tiles = gr.tile(parse.gr('1'),w)[1:n]
   return(makebfb(tiles,cycles=cycles,background=F)[1])
