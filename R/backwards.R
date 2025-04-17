@@ -1,7 +1,7 @@
 #TODO for all inference methods: make some hashing method so that user can look at all the sampled walk sets and their respective NLLs
 #maybe write a method to preprocess hic data and estimate depth...?
 infer.walks <- function(graph,hic.data,depth,stepping_mode='dumb',temperature=1,init_walk = NULL,return.vals='walks',num.iter=100,pix.size=0){
-  wiring = gg.to.wiring(graph) #make a wiring object
+    wiring = gg.to.wiring(graph) #make a wiring object
   if(is.null(init_walk)){
     init_walk = walks.from.edges(wiring,1) #start at a random first walk decomposition
   }
