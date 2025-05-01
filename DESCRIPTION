@@ -17,7 +17,6 @@ Imports:
     pracma,
     MASS,
     gUtils,
-    ietools,
     data.table,
     parallel,
     Rcpp,
