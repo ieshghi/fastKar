@@ -1,4 +1,16 @@
-f1score_comparemaps <- function(null_map,hyp_map,theta=3,significance = 0.05,return_samples=FALSE){
+f1score_comparemaps <- function(null_map,hyp_map,theta=3,significance = 0.05,return_samples=FALSE,mask=NULL){
+  if (!is.null(mask)){
+      gr = null_map$gr %&% mask
+      bad.inds = gr$tile.id
+      nulldat = null_map$dat
+      hypdat = hyp_map$dat
+      nulldat[i %in% bad.inds,value:=0]
+      nulldat[j %in% bad.inds,value:=0]
+      hypdat[i %in% bad.inds,value:=0]
+      hypdat[j %in% bad.inds,value:=0]
+      null_map = gM(gr = null_map$gr,dat=nulldat)
+      hyp_map = gM(gr = hyp_map$gr,dat=dat)
+  }
   num_samples = 10/significance
   samples = lapply(list(null_map,hyp_map),function(m){make_noisydat(m,num_samples,theta)}) #samples to classify}
   likelihooddiff = lapply(samples,function(s){
@@ -19,7 +31,7 @@ f1score_comparemaps <- function(null_map,hyp_map,theta=3,significance = 0.05,ret
   }
 }
 
-test.walks.with.hic <- function(walkset,hic.data,resolution=1e5,mc.cores=1,target_region=NULL,if.diag=TRUE,depth.est=NULL,return='scores'){
+test.walks.with.hic <- function(walkset,hic.data,resolution=1e5,mc.cores=1,target_region=NULL,if.diag=TRUE,depth.est=NULL,return='scores',mask=NULL){
     if(!is.list(walkset)){
         stop('Give me multiple walks with the same footprint in a list to compare!')
     }
@@ -35,26 +47,34 @@ test.walks.with.hic <- function(walkset,hic.data,resolution=1e5,mc.cores=1,targe
     rebin.data = (hic.data$disjoin(predictions[[1]]$gr))$agg(predictions[[1]]$gr) #make sure data is aggregated on the same GRanges as the predictions
 
     if (return=='scores'){
-        scores = mclapply(predictions,function(pred){compmaps(rebin.data,pred,ifsum=TRUE,theta=3,if.diag=if.diag)},mc.cores=mc.cores)
+        scores = mclapply(predictions,function(pred){compmaps(rebin.data,pred,ifsum=TRUE,theta=3,if.diag=if.diag,mask=mask)},mc.cores=mc.cores)
         return(scores)
     } else if (return=='scoremaps'){
-        scoremaps = mclapply(predictions,function(pred){compmaps(rebin.data,pred,ifsum=FALSE,theta=3,if.diag=if.diag)},mc.cores=mc.cores)
+        scoremaps = mclapply(predictions,function(pred){compmaps(rebin.data,pred,ifsum=FALSE,theta=3,if.diag=if.diag,mask=mask)},mc.cores=mc.cores)
         return(scoremaps)
     } else if (return=='predictions'){
         return(predictions)
     } else if (return == 'sp') {
-        scores = mclapply(predictions,function(pred){compmaps(pred,rebin.data,ifsum=TRUE,theta=3,if.diag=if.diag)},mc.cores=mc.cores)
+        scores = mclapply(predictions,function(pred){compmaps(pred,rebin.data,ifsum=TRUE,theta=3,if.diag=if.diag,mask=mask)},mc.cores=mc.cores)
         return(list(scores = scores, predictions = predictions, hic.data = rebin.data))
     } else if (return == 'all') {
-        scores = mclapply(predictions,function(pred){compmaps(pred,rebin.data,ifsum=TRUE,theta=3,if.diag=if.diag)},mc.cores=mc.cores)
-        scoremaps = mclapply(predictions,function(pred){compmaps(pred,rebin.data,ifsum=FALSE,theta=3,if.diag=if.diag)},mc.cores=mc.cores)
+        scores = mclapply(predictions,function(pred){compmaps(pred,rebin.data,ifsum=TRUE,theta=3,if.diag=if.diag,mask=mask)},mc.cores=mc.cores)
+        scoremaps = mclapply(predictions,function(pred){compmaps(pred,rebin.data,ifsum=FALSE,theta=3,if.diag=if.diag,mask=mask)},mc.cores=mc.cores)
         return(list(scores = scores, predictions = predictions, scoremaps = scoremaps, hic.data = rebin.data))
     }
 }
 
-compmaps <- function(map_test,map_true,theta=0,ifsum=FALSE,ifscale = FALSE,if.diag=TRUE){ 
-    #returns the negative log likelihood of test map given true map and negative-binomial noise
+compmaps <- function(map_test,map_true,theta=0,ifsum=FALSE,ifscale = FALSE,if.diag=TRUE,mask=NULL){ 
+    if (!is.null(mask)){
+        gr = map_true$gr %&% mask
+        bad.inds = gr$tile.id
+        trudat = map_true$dat
+        trudat[i %in% bad.inds,value:=0]
+        trudat[j %in% bad.inds,value:=0]
+        map_true = gM(gr=map_true$gr,dat=trudat)
+    }
     template = make_template_dat(map_true$gr)
+    #returns the negative log likelihood of test map given true map and negative-binomial noise
     dat_test = merge.data.table(template[,.(i,j,id)],map_test$dat[,.(i,j,value)],all.x=TRUE,by=c('i','j'))
     dat_true = merge.data.table(template[,.(i,j,id)],map_true$dat[,.(i,j,value)],all.x=TRUE,by=c('i','j'))
     dat_test[is.na(value),value:=0]
@@ -64,18 +84,6 @@ compmaps <- function(map_test,map_true,theta=0,ifsum=FALSE,ifscale = FALSE,if.di
         return(sum(comp_dat$value))
     }else{
         return(gM(gr=map_true$gr,dat=comp_dat))
-    }
-}
-
-ensemble_compmaps <- function(map_test,map_true,n=100,theta=0,ifscale=FALSE,if.diag=TRUE,ifsum=FALSE,mc.cores=1){
-    gr_test = map_test$gr
-    dat_true = map_true$dat
-    test.ensemble = make_noisydat(map_test,num.copies=n,theta=theta)
-    comps = mclapply(test.ensemble,function(m){compdats(m,dat_true,theta,ifscale=ifscale,ifsum=ifsum,if.diag=if.diag)},mc.cores=mc.cores)
-    if(ifsum){
-        return(mean(unlist(comps)))
-    }else{
-        return(gM(gr=gr_test,dat=sum_matrices(comps))/n)
     }
 }
 
