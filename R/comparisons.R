@@ -7,20 +7,19 @@ f1score_comparemaps <- function(null_map,hyp_map,theta=3,significance = 0.05,ret
                     }))
                    })
   likcutoff = unname(quantile(likelihooddiff[[1]],1-significance)) #bootstrap likelihood ratio cutoff by sampling from the null
-  if (return_samples){
-    return(list(likelihooddiff[[1]],likelihooddiff[[2]],likcutoff))
-  }else{
   reject_null = likelihooddiff[[2]] > likcutoff
-
   tps = sum(reject_null==TRUE) #since hyp_samples are non-null, rejecting the null in those samples is a true positive
   fns = sum(reject_null==FALSE) #for the same reason as above, keeping the null in those samples is a false negative
   fps = significance*num_samples #by design, false positive rate is the significance level we choose times the number of samples
   f1 = 2*tps/(2*tps + fps + fns)
+  if (return_samples){
+    return(list(likelihooddiff[[1]],likelihooddiff[[2]],likcutoff))
+  } else{
   return(f1)
   }
 }
 
-test.walks.with.hic <- function(walkset,hic.data,resolution=1e5,mc.cores=1,target_region=NULL,return='scores'){
+test.walks.with.hic <- function(walkset,hic.data,resolution=1e5,mc.cores=1,target_region=NULL,if.diag=TRUE,depth.est=NULL,return='scores'){
     if(!is.list(walkset)){
         stop('Give me multiple walks with the same footprint in a list to compare!')
     }
@@ -28,26 +27,27 @@ test.walks.with.hic <- function(walkset,hic.data,resolution=1e5,mc.cores=1,targe
         firstwalk = walkset[[1]]
         target_region=firstwalk$footprint
     }
-    depth.est = estimate.depthratio(hic.data,resolution)
+    if(is.null(depth.est))
+      depth.est = estimate.depthratio(hic.data,resolution)
     predictions = mclapply(walkset,function(w){
-        return(forward_simulate(w,target_region=target_region,if.comps=F,pix.size=resolution,mc.cores=1,verbose=F,if.sum=T,depth=depth.est,model=0))
+        return(forward_simulate(w,target_region=target_region,if.comps=F,pix.size=resolution,mc.cores=1,if.sum=T,depth=depth.est,model=0))
     },mc.cores=mc.cores)
     rebin.data = (hic.data$disjoin(predictions[[1]]$gr))$agg(predictions[[1]]$gr) #make sure data is aggregated on the same GRanges as the predictions
 
     if (return=='scores'){
-        scores = mclapply(predictions,function(pred){compmaps(rebin.data,pred,ifsum=TRUE,theta=3)},mc.cores=mc.cores)
+        scores = mclapply(predictions,function(pred){compmaps(rebin.data,pred,ifsum=TRUE,theta=3,if.diag=if.diag)},mc.cores=mc.cores)
         return(scores)
     } else if (return=='scoremaps'){
-        scoremaps = mclapply(predictions,function(pred){compmaps(rebin.data,pred,ifsum=FALSE,theta=3)},mc.cores=mc.cores)
+        scoremaps = mclapply(predictions,function(pred){compmaps(rebin.data,pred,ifsum=FALSE,theta=3,if.diag=if.diag)},mc.cores=mc.cores)
         return(scoremaps)
     } else if (return=='predictions'){
         return(predictions)
     } else if (return == 'sp') {
-        scores = mclapply(predictions,function(pred){compmaps(pred,rebin.data,ifsum=TRUE,theta=3)},mc.cores=mc.cores)
-        return(list(scores = scores, predictions = predictions))
+        scores = mclapply(predictions,function(pred){compmaps(pred,rebin.data,ifsum=TRUE,theta=3,if.diag=if.diag)},mc.cores=mc.cores)
+        return(list(scores = scores, predictions = predictions, hic.data = rebin.data))
     } else if (return == 'all') {
-        scores = mclapply(predictions,function(pred){compmaps(pred,rebin.data,ifsum=TRUE,theta=3)},mc.cores=mc.cores)
-        scoremaps = mclapply(predictions,function(pred){compmaps(pred,rebin.data,ifsum=FALSE,theta=3)},mc.cores=mc.cores)
+        scores = mclapply(predictions,function(pred){compmaps(pred,rebin.data,ifsum=TRUE,theta=3,if.diag=if.diag)},mc.cores=mc.cores)
+        scoremaps = mclapply(predictions,function(pred){compmaps(pred,rebin.data,ifsum=FALSE,theta=3,if.diag=if.diag)},mc.cores=mc.cores)
         return(list(scores = scores, predictions = predictions, scoremaps = scoremaps, hic.data = rebin.data))
     }
 }
