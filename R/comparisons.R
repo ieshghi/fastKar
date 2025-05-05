@@ -19,7 +19,7 @@ f1score_comparemaps <- function(null_map,hyp_map,theta=3,significance = 0.05,ret
   }
 }
 
-test.walks.with.hic <- function(walkset,hic.data,resolution=1e5,mc.cores=1,target_region=NULL,depth.est=NULL,return='scores'){
+test.walks.with.hic <- function(walkset,hic.data,resolution=1e5,mc.cores=1,target_region=NULL,if.diag=TRUE,depth.est=NULL,return='scores'){
     if(!is.list(walkset)){
         stop('Give me multiple walks with the same footprint in a list to compare!')
     }
@@ -35,19 +35,19 @@ test.walks.with.hic <- function(walkset,hic.data,resolution=1e5,mc.cores=1,targe
     rebin.data = (hic.data$disjoin(predictions[[1]]$gr))$agg(predictions[[1]]$gr) #make sure data is aggregated on the same GRanges as the predictions
 
     if (return=='scores'){
-        scores = mclapply(predictions,function(pred){compmaps(rebin.data,pred,ifsum=TRUE,theta=3)},mc.cores=mc.cores)
+        scores = mclapply(predictions,function(pred){compmaps(rebin.data,pred,ifsum=TRUE,theta=3,if.diag=if.diag)},mc.cores=mc.cores)
         return(scores)
     } else if (return=='scoremaps'){
-        scoremaps = mclapply(predictions,function(pred){compmaps(rebin.data,pred,ifsum=FALSE,theta=3)},mc.cores=mc.cores)
+        scoremaps = mclapply(predictions,function(pred){compmaps(rebin.data,pred,ifsum=FALSE,theta=3,if.diag=if.diag)},mc.cores=mc.cores)
         return(scoremaps)
     } else if (return=='predictions'){
         return(predictions)
     } else if (return == 'sp') {
-        scores = mclapply(predictions,function(pred){compmaps(pred,rebin.data,ifsum=TRUE,theta=3)},mc.cores=mc.cores)
+        scores = mclapply(predictions,function(pred){compmaps(pred,rebin.data,ifsum=TRUE,theta=3,if.diag=if.diag)},mc.cores=mc.cores)
         return(list(scores = scores, predictions = predictions, hic.data = rebin.data))
     } else if (return == 'all') {
-        scores = mclapply(predictions,function(pred){compmaps(pred,rebin.data,ifsum=TRUE,theta=3)},mc.cores=mc.cores)
-        scoremaps = mclapply(predictions,function(pred){compmaps(pred,rebin.data,ifsum=FALSE,theta=3)},mc.cores=mc.cores)
+        scores = mclapply(predictions,function(pred){compmaps(pred,rebin.data,ifsum=TRUE,theta=3,if.diag=if.diag)},mc.cores=mc.cores)
+        scoremaps = mclapply(predictions,function(pred){compmaps(pred,rebin.data,ifsum=FALSE,theta=3,if.diag=if.diag)},mc.cores=mc.cores)
         return(list(scores = scores, predictions = predictions, scoremaps = scoremaps, hic.data = rebin.data))
     }
 }
