@@ -98,10 +98,10 @@ estimate.depthratio <- function(hic.data){ #put here hic data in a non-rearrange
   return(1500*est)
 }
 
-compdats <- function(dat_test,dat_true,widths = NULL,theta=0,ifscale=FALSE,ifsum=TRUE,checkinds=TRUE,if.diag=TRUE){
+compdats <- function(dat_test,dat_true,theta=0,ifscale=FALSE,ifsum=TRUE,checkinds=TRUE,if.diag=TRUE){
     area0 = 1e8
-    if (is.null(dat.test$widthprod)){
-        dat.test$widthprod= area0 #if the data.table doesn't have an area column, assume all pixels are the same size
+    if (is.null(dat_test$widthprod)){
+        dat_test$widthprod= area0 #if the data.table doesn't have an area column, assume all pixels are the same size
     }
     if(checkinds){
         setkeyv(dat_test,c('i','j'))
@@ -113,7 +113,7 @@ compdats <- function(dat_test,dat_true,widths = NULL,theta=0,ifscale=FALSE,ifsum
         dat_test_scale = (dat_test$value)*mean(dat_true$value,na.rm=TRUE)/mean(dat_test$value,na.rm=TRUE) #re-scale using means
         dat_test$value = dat_test_scale
     }
-    combdat = merge.data.table(dat_test[,.(i,j,area,id,value)],dat_true[,.(id,value)],by='id')
+    combdat = merge.data.table(dat_test[,.(i,j,widthprod,id,value)],dat_true[,.(id,value)],by='id')
     if(if.diag==FALSE){
         combdat = combdat[i!=j]
     }
