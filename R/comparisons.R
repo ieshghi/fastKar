@@ -100,7 +100,7 @@ estimate.depthratio <- function(hic.data){ #put here hic data in a non-rearrange
 
 compdats <- function(dat_test,dat_true,theta=0,ifscale=FALSE,ifsum=TRUE,checkinds=TRUE,if.diag=TRUE){
     area0 = 1e8
-    if (is.null(dat.test$widthprod)){
+    if (is.null(dat_test$widthprod)){
         dat_test$widthprod= area0 #if the data.table doesn't have an area column, assume all pixels are the same size
     }
     if(checkinds){
