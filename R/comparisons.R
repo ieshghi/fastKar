@@ -75,8 +75,8 @@ compmaps <- function(map_test,map_true,theta=0,ifsum=FALSE,ifscale = FALSE,if.di
     }
     template = make_template_dat(map_true$gr)
     #returns the negative log likelihood of test map given true map and negative-binomial noise
-    dat_test = merge.data.table(template[,.(i,j,id)],map_test$dat[,.(i,j,value)],all.x=TRUE,by=c('i','j'))
-    dat_true = merge.data.table(template[,.(i,j,id)],map_true$dat[,.(i,j,value)],all.x=TRUE,by=c('i','j'))
+    dat_test = merge.data.table(template[,.(i,j,widthprod,id)],map_test$dat[,.(i,j,value)],all.x=TRUE,by=c('i','j'))
+    dat_true = merge.data.table(template[,.(i,j,widthprod,id)],map_true$dat[,.(i,j,value)],all.x=TRUE,by=c('i','j'))
     dat_test[is.na(value),value:=0]
     dat_true[is.na(value),value:=0]
     comp_dat = compdats(dat_test,dat_true,theta,ifscale,ifsum=FALSE,if.diag=if.diag)
@@ -87,7 +87,7 @@ compmaps <- function(map_test,map_true,theta=0,ifsum=FALSE,ifscale = FALSE,if.di
     }
 }
 
-estimate.depthratio <- function(hic.data,res=1e5){ #put here hic data in a non-rearranged place. Estimates the depth ratio between this data and the reference data
+estimate.depthratio <- function(hic.data){ #put here hic data in a non-rearranged place. Estimates the depth ratio between this data and the reference data
   lookup.data = fastKar::small_lookup
   dat = hic.data$dat[i!=j]
   dat[,d:=res*(j-i)]
@@ -98,7 +98,11 @@ estimate.depthratio <- function(hic.data,res=1e5){ #put here hic data in a non-r
   return(1500*est)
 }
 
-compdats <- function(dat_test,dat_true,theta=0,ifscale=FALSE,ifsum=TRUE,checkinds=TRUE,if.diag=TRUE){
+compdats <- function(dat_test,dat_true,widths = NULL,theta=0,ifscale=FALSE,ifsum=TRUE,checkinds=TRUE,if.diag=TRUE){
+    area0 = 1e8
+    if (is.null(dat.test$widthprod)){
+        dat.test$widthprod= area0 #if the data.table doesn't have an area column, assume all pixels are the same size
+    }
     if(checkinds){
         setkeyv(dat_test,c('i','j'))
         setkeyv(dat_true,c('i','j'))
@@ -109,7 +113,7 @@ compdats <- function(dat_test,dat_true,theta=0,ifscale=FALSE,ifsum=TRUE,checkind
         dat_test_scale = (dat_test$value)*mean(dat_true$value,na.rm=TRUE)/mean(dat_test$value,na.rm=TRUE) #re-scale using means
         dat_test$value = dat_test_scale
     }
-    combdat = merge.data.table(dat_test[,.(i,j,id,value)],dat_true[,.(id,value)],by='id')
+    combdat = merge.data.table(dat_test[,.(i,j,area,id,value)],dat_true[,.(id,value)],by='id')
     if(if.diag==FALSE){
         combdat = combdat[i!=j]
     }
@@ -120,9 +124,9 @@ compdats <- function(dat_test,dat_true,theta=0,ifscale=FALSE,ifsum=TRUE,checkind
     }
     combdat[value.y==0,logprob:=0]
     if (ifsum==TRUE){
-        return(-sum(combdat$logprob,na.rm=TRUE))
+        return(-sum((combdat$widthprod/area0)*combdat$logprob,na.rm=TRUE))
     }else{
-        return(combdat[,.(value=-logprob,i,j,id)])
+        return(combdat[,.(value=-logprob*widthprod/area0,i,j,id)])
     }
 }
 
@@ -134,6 +138,8 @@ make_noisymap <- function(map_in,theta=0,num.copies=1,mc.cores=20){
 
 make_noisydat <- function(map_in,num.copies=1,theta=0,backlambda = 0){ #samples from negative binomial distribution, unless theta=0 then uses poisson
     mapdat = map_in$dat
+    template = make_template_dat(map_in$gr)
+    mapdat = merge.data.table(template[,.(i,j,widthprod,id)],mapdat[,.(i,j,value)],all.x=TRUE,by=c('i','j'))
     meanvals = mapdat$value
     if (theta==0){
         newval = rpois(length(meanvals)*num.copies,rep(meanvals,num.copies))
