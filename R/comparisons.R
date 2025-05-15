@@ -31,7 +31,7 @@ f1score_comparemaps <- function(null_map,hyp_map,theta=3,significance = 0.05,ret
   }
 }
 
-test.walks.with.hic <- function(walkset,hic.data,resolution=1e5,mc.cores=1,target_region=NULL,if.diag=TRUE,depth.est=NULL,return='scores',mask=NULL){
+test.walks.with.hic <- function(walkset,hic.data,resolution=1e5,mc.cores=1,depth.est,target_region=NULL,if.diag=TRUE,return='scores',mask=NULL){
     if(!is.list(walkset)){
         stop('Give me multiple walks with the same footprint in a list to compare!')
     }
@@ -39,8 +39,6 @@ test.walks.with.hic <- function(walkset,hic.data,resolution=1e5,mc.cores=1,targe
         firstwalk = walkset[[1]]
         target_region=firstwalk$footprint
     }
-    if(is.null(depth.est))
-      depth.est = estimate.depthratio(hic.data,resolution)
     predictions = mclapply(walkset,function(w){
         return(forward_simulate(w,target_region=target_region,if.comps=F,pix.size=resolution,mc.cores=1,if.sum=T,depth=depth.est,model=0))
     },mc.cores=mc.cores)
