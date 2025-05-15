@@ -87,15 +87,14 @@ compmaps <- function(map_test,map_true,theta=0,ifsum=FALSE,ifscale = FALSE,if.di
     }
 }
 
-estimate.depthratio <- function(hic.data){ #put here hic data in a non-rearranged place. Estimates the depth ratio between this data and the reference data
-  lookup.data = fastKar::small_lookup
-  dat = hic.data$dat[i!=j]
-  dat[,d:=res*(j-i)]
-  dat[,source:='skov3']
-  dat[,tot_density:=mean(value/res^2,na.rm=TRUE),by=d]
-  dat = unique(dat[d>=res & d<=1e7,.(d,tot_density,source)])
-  est = dat[d==1e5]$tot_density/mean(lookup.data[d==1e5]$tot_density) #gets ratio between counts in reference data (1500x) and provided data
-  return(1500*est)
+estimate.depthratio <- function(filepath,mode='hic',res=1e6){ #put here hic data in a non-rearranged place. Estimates the depth ratio between this data and the reference data
+    wholegenome = gr.tile(si2gr(hg_seqlengths()[1:24]),res)
+    if (mode=='hic'){
+        depthest.hic = straw(filepath,res=as.integer(res),gr=wholegenome)
+    }else if (mode=='mcool'){
+        depthest.hic = cooler(filepath,res=as.integer(res),gr=wholegenome)
+    }
+    return(depthest.hic$value%>%sum * 300 / 3e9)
 }
 
 compdats <- function(dat_test,dat_true,theta=0,ifscale=FALSE,ifsum=TRUE,checkinds=TRUE,if.diag=TRUE){

@@ -49,11 +49,18 @@ dists.and.widths = mclapply(coarsegrained.data,function(gm){
 
 saveRDS(dists.and.widths,paste0(datafolder,'dists_and_widths.rds'))
 
+# let's make the model
 # first look at non-self contacts
 dists.and.widths = readRDS(paste0(datafolder,'dists_and_widths.rds'))
 dists.and.widths[,distmean:=sum(value)/num,by=c('dist','widthprod')]
 distmeans = unique(dists.and.widths[,.(value=distmean,dist,widthprod)])
 saveRDS(distmeans,paste0(datafolder,'distmeans.rds'))
+
+#what is the depth of the Rao sample
+hic.file = '/gpfs/commons/groups/imielinski_lab/data/PoreC/Rao2014/4DNFI1UEG1HD.hic'
+wholegenome = gr.tile(si2gr(hg_seqlengths()[1:24]),1e7)
+depthest.hic = straw(hic.file,res=as.integer(1e7),gr=wholegenome)
+rao.depth = (depthest.hic$value %>% sum)*300/3e9 #this is DIPLOID depth
 
 distmeans = readRDS(paste0(datafolder,'distmeans.rds'))
 maxval = 1e8
@@ -73,7 +80,7 @@ width=5,height=3,filename='karyotype_inference/diagonal_areadep')
 #train a spline function for distance decay
 dist.splinedat = distmeans[dist>0]
 dist.splinedat[,x:=log(dist)]
-dist.splinedat[,y:=log(2*value/(1500*widthprod))] #Factor of 2 is important!! 1500x is the depth of the Rao sequencing, but it is "diploid" depth, while we are trying to simulate depth of single alleles
+dist.splinedat[,y:=log(2*value/(rao.depth*widthprod))] #Factor of 2 is important!! 1500x is the depth of the Rao sequencing, but it is "diploid" depth, while we are trying to simulate depth of single alleles
 spline_dist = splinefun(dist.splinedat$x,dist.splinedat$y)
 
 #make a plot showing the quality of the fit
@@ -87,7 +94,7 @@ filename='karyotype_inference/spline_fit')
 #train a spline function for area dependence near diagonal
 diag.splinedat = distmeans[dist==0]
 diag.splinedat[,x:=log(widthprod)]
-diag.splinedat[,y:=log(2*value/(1500))] #Again, we have a factor of 2 from the DIPLOID coverage
+diag.splinedat[,y:=log(2*value/(rao.depth))] #Again, we have a factor of 2 from the DIPLOID coverage
 diag_model <- lm(diag.splinedat$y ~ diag.splinedat$x)
 coeffs <- coef(diag_model)
 spline_diag = function(x) {coeffs[1] + coeffs[2] * x}
@@ -110,7 +117,7 @@ dat[,interchrom:=!((gr.dt[i]$seqnames)==(gr.dt[j]$seqnames))]
 # assuming density is ~constant, we just calculate total interchromosomal area, get total counts and divide by that
 interchr.area = as.numeric(width(parse.gr('1')))*width(parse.gr('2')) #just a check
 total.interchrom.hits = dat[interchrom==TRUE]$value %>% sum
-interchrom_density = total.interchrom.hits/(interchr.area * 750 * 4)
+interchrom_density = total.interchrom.hits/(interchr.area * rao.depth * 4)
 # each allele has 750x coverage, then interchromosomal hits at position i,j go like density* CN(i) * CN(j) * area
 
 #just checking we're getting the density more or less right
@@ -142,7 +149,7 @@ dists.and.widths[,mynum:=.N,by=c('widthprod','dist')]
 #However zeros have been omitted from the dataset so we need to restore them. 
 #bringing all of them back will take too much mem, so we sample the data then restore zeros proportionally
 noiseval = dists.and.widths[,.(value,tile.ar = widthprod,d = dist,numzeros=num-mynum)]
-noiseval[,expected:=predict.hic(d,tile.ar,750)]
+noiseval[,expected:=predict.hic(d,tile.ar,rao.depth/2)]
 
 mindist = 1e5
 maxdist = 1e8
@@ -190,3 +197,11 @@ result <- unique(subdata2[, .(mexp = mean(predicted_density),err = sd(density)/m
 
 ppdf(plot(ggplot(result[tile.ar <= 1e12])+geom_point(aes(x=mexp,y=mdat,color=log(tile.ar))) + scale_x_log10() + scale_y_log10()),width=5,height=3)
 ppdf(plot(ggplot(result)+geom_point(aes(x=mexp,y=err*(tile.ar)^(1/4),color=log(tile.ar))) + scale_x_log10() + scale_y_log10()),width=5,height=3)
+
+# test depth
+chr1mb = straw(hic.file,gr=parse.gr('1'),res=1e6)
+chr1walk = makewalk(parse.gr('1'),list(1,1))
+simdat = forward_simulate(chr1walk,target_region=streduce(chr1mb$gr),pix.size=1e6,depth=rao.depth)
+combdat = merge.data.table(simdat$dat[,.(i,j,value)],chr1mb$dat[,.(i,j,value)],by=c('i','j'))
+ppdf(plot(ggplot(combdat) +geom_point(aes(x=value.x,y=value.y)) + geom_line(aes(x=value.x,y=value.x),linetype='dashed') + scale_x_log10() + scale_y_log10()),width=5,height=4)
+ppdf(plot(c(chr1mb$gtrack(cmap.max=5e4),simdat$gtrack(cmap.max=5e4)),parse.gr('1')),width=5,height=10)

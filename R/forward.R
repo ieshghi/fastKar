@@ -228,20 +228,10 @@ calculate_interchrom <- function(intra.dts,walk.dts,tiled.target,walk.cn,if.comp
         lookup_interchr = fastKar::small_lookup[d<0]
         template[,raw_density:=lookup_interchr[interaction==this.interaction]$tot_density/1500,by=this.interaction]
     }else{
-        lookup_interchr = fastKar::small_lookup[d<0 & interaction=='same']
-        raw_density = lookup_interchr$tot_density/1500
+        raw_density= fastKar::interchrom_density
     }
-    # use one-shot calculation formula: n_ij = rate * widthprod * (total_i*total_j - sum_(k walks) (cn_i * cn_j))
+    # use one-shot calculation formula: n_ij = rate * widthprod * (CN_i*CN_j)
     mydat = data.table::copy(template)[,titj:=target.dt$cn[i]*target.dt$cn[j]] 
-#    walk_nodecounts = t(do.call(cbind,lapply(1:length(walk.dts),function(i){ #make matrix of tile copies per walk
-#        w = walk.dts[[i]]
-#        wcn = walk.cn[i]
-#        w[,tilecount:=.N,by=orig.id]
-#        nodecounts.dt = unique(w[!is.na(orig.id),.(orig.id,tilecount)])
-#        nodecounts.dt[,tilecount:=tilecount*wcn]
-#        return((merge.data.table(target.dt,nodecounts.dt,by='orig.id',all.x=T)[is.na(tilecount),tilecount:=0]$tilecount))
-#    })))
-#    mydat[,sum_sisj :=colSums(walk_nodecounts[,i, drop = FALSE] * walk_nodecounts[,j, drop = FALSE])]
     mydat[,value:=widthprod*raw_density*(titj)] #can subtract sum_sisj if no inter-contacts among same chrom nodes
     intra_sum = sum_matrices(intra.dts)
     combdat = merge.data.table(mydat[,.(inter_value=value,id)],intra_sum[,.(i,j,intra_value=value,id)],by='id',allow.cartesian=T)[,value:=intra_value+inter_value]
