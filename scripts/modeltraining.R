@@ -80,7 +80,7 @@ width=5,height=3,filename='karyotype_inference/diagonal_areadep')
 #train a spline function for distance decay
 dist.splinedat = distmeans[dist>0]
 dist.splinedat[,x:=log(dist)]
-dist.splinedat[,y:=log(2*value/(rao.depth*widthprod))] #Factor of 2 is important!! 1500x is the depth of the Rao sequencing, but it is "diploid" depth, while we are trying to simulate depth of single alleles
+dist.splinedat[,y:=log(value/(2*rao.depth*widthprod))] #Factor of 2 is important!! 1500x is the depth of the Rao sequencing, but it is "diploid" depth, while we are trying to simulate depth of single alleles
 spline_dist = splinefun(dist.splinedat$x,dist.splinedat$y)
 
 #make a plot showing the quality of the fit
@@ -91,13 +91,15 @@ plotdat = rbind(plotdat,plotdat2)
 ppdf(plot(ggplot()+geom_point(data=plotdat[type=='data'],aes(x=exp(x),y=exp(y),color=type),size=1) + geom_line(data=plotdat[type=='fit'],aes(x=exp(x),y=exp(y),color=type))+ scale_x_log10() + scale_y_log10() + labs(x='Distance [bp]',y='Count density [bp^-2]')),width=6,height=4,
 filename='karyotype_inference/spline_fit')
 
-#train a spline function for area dependence near diagonal
 diag.splinedat = distmeans[dist==0]
 diag.splinedat[,x:=log(widthprod)]
-diag.splinedat[,y:=log(2*value/(rao.depth))] #Again, we have a factor of 2 from the DIPLOID coverage
+diag.splinedat[,y:=log(value/(2*rao.depth))] #Again, we have a factor of 2 from the DIPLOID coverage
 diag_model <- lm(diag.splinedat$y ~ diag.splinedat$x)
 coeffs <- coef(diag_model)
-spline_diag = function(x) {coeffs[1] + coeffs[2] * x}
+spline_diag <- eval(substitute(
+  function(x_new) { a + b * x_new },
+  list(a = coeffs[1], b = coeffs[2])
+))
 splineobj=list(diag_spline = spline_diag,distance_spline = spline_dist) 
 
 ppdf(plot(ggplot(diag.splinedat) + geom_line(aes(x=x,y=spline_diag(x))) +geom_point(aes(x=x,y=y))),width=5,height=4,filename='karyotype_inference/diag_linfit')
@@ -199,9 +201,10 @@ ppdf(plot(ggplot(result[tile.ar <= 1e12])+geom_point(aes(x=mexp,y=mdat,color=log
 ppdf(plot(ggplot(result)+geom_point(aes(x=mexp,y=err*(tile.ar)^(1/4),color=log(tile.ar))) + scale_x_log10() + scale_y_log10()),width=5,height=3)
 
 # test depth
-chr1mb = straw(hic.file,gr=parse.gr('1'),res=1e6)
-chr1walk = makewalk(parse.gr('1'),list(1,1))
-simdat = forward_simulate(chr1walk,target_region=streduce(chr1mb$gr),pix.size=1e6,depth=rao.depth)
-combdat = merge.data.table(simdat$dat[,.(i,j,value)],chr1mb$dat[,.(i,j,value)],by=c('i','j'))
+chr12mb = straw(hic.file,gr=parse.gr('1,2'),res=1e6)
+chr1walk = makewalk(parse.gr('1:1-1e8'),list(1,1))
+simdat = forward_simulate(chr1walk,target_region=streduce(chr1walk$grl),pix.size=1e6,depth=rao.depth/4)
+chr1data = chr12mb$disjoin(simdat$gr)$agg(simdat$gr)
+combdat = merge.data.table(simdat$dat[,.(i,j,value)],chr1data$dat[,.(i,j,value)],by=c('i','j'))
 ppdf(plot(ggplot(combdat) +geom_point(aes(x=value.x,y=value.y)) + geom_line(aes(x=value.x,y=value.x),linetype='dashed') + scale_x_log10() + scale_y_log10()),width=5,height=4)
-ppdf(plot(c(chr1mb$gtrack(cmap.max=5e4),simdat$gtrack(cmap.max=5e4)),parse.gr('1')),width=5,height=10)
+ppdf(plot(c(chr1data$gtrack(cmap.max=5e4),simdat$gtrack(cmap.max=5e4)),parse.gr('1')),width=5,height=10)
