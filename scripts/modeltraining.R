@@ -1,4 +1,4 @@
-#Script to train the model used throughout fastKar from Rao 2014 data
+#Script to train (and test?) the model used throughout fastKar from Rao 2014 data
 
 #make very fine tiling of Rao 2014, keep it to chromosome 1 
 datafolder = '~/Projects/karyotype-inference/data/'
@@ -157,22 +157,6 @@ mindist = 1e5
 maxdist = 1e8
 noiseval = noiseval[d > mindist & d < maxdist]
 
-#let's evenly sample from all tiling sizes
-data_per_ar = split(noiseval,by='tile.ar')
-unique_areas = noiseval$tile.ar %>% unique
-samplesize = 3e5
-samples_per_ar = samplesize / length(unique_areas)
-subdata = mclapply(data_per_ar,function(x){
-  if (nrow(x)<samples_per_ar){
-    return(NULL)
-  }
-  x[,zerokeep := as.integer(numzeros*samples_per_ar/nrow(x))]
-  indkeep = sample(1:nrow(x),samples_per_ar)
-  subdata_nozeros = x[indkeep,.(value,d,tile.ar,expected,zerokeep)]
-  zerorows = unique(subdata_nozeros[,.(value=0,d,tile.ar,expected,zerokeep)])[rep(1:.N,zerokeep)]
-  return(rbind(subdata_nozeros,zerorows))
-},mc.cores=5) %>% rbindlist
-
 samplesize = 3e6
 samplefrac = samplesize/nrow(noiseval)
 noiseval[,zerokeep := as.integer(numzeros*samplefrac)]
@@ -201,10 +185,31 @@ ppdf(plot(ggplot(result[tile.ar <= 1e12])+geom_point(aes(x=mexp,y=mdat,color=log
 ppdf(plot(ggplot(result)+geom_point(aes(x=mexp,y=err*(tile.ar)^(1/4),color=log(tile.ar))) + scale_x_log10() + scale_y_log10()),width=5,height=3)
 
 # test depth
-chr12mb = straw(hic.file,gr=parse.gr('1,2'),res=1e6)
+chr12mb = straw(hic.file,gr=parse.gr('1:1-1e8,2:1-1e8'),res=1e6)
 chr1walk = makewalk(parse.gr('1:1-1e8'),list(1,1))
-simdat = forward_simulate(chr1walk,target_region=streduce(chr1walk$grl),pix.size=1e6,depth=rao.depth/4)
-chr1data = chr12mb$disjoin(simdat$gr)$agg(simdat$gr)
-combdat = merge.data.table(simdat$dat[,.(i,j,value)],chr1data$dat[,.(i,j,value)],by=c('i','j'))
-ppdf(plot(ggplot(combdat) +geom_point(aes(x=value.x,y=value.y)) + geom_line(aes(x=value.x,y=value.x),linetype='dashed') + scale_x_log10() + scale_y_log10()),width=5,height=4)
-ppdf(plot(c(chr1data$gtrack(cmap.max=5e4),simdat$gtrack(cmap.max=5e4)),parse.gr('1')),width=5,height=10)
+chr1_simdat = forward_simulate(chr1walk,target_region=streduce(chr1walk$grl),pix.size=1e6,depth=rao.depth)
+noisy_chr1 = make_noisymap(chr1_simdat,theta=3)[[1]]
+chr1data = chr12mb$disjoin(chr1_simdat$gr)$agg(chr1_simdat$gr)
+combdat = merge.data.table(noisy_chr1$dat[,.(i,j,value)],chr1data$dat[,.(i,j,value)],by=c('i','j'))
+#
+combdat[,d:=abs(j-i)]
+combdat[,xavg:=mean(value.x),by=c('d')]
+combdat[,yavg:=mean(value.y),by=c('d')]
+plotcomb = unique(combdat[,.(xavg,yavg)])
+ppdf(plot(ggplot(plotcomb) +geom_point(aes(x=xavg,y=yavg)) + geom_line(aes(x=xavg,y=xavg),linetype='dashed') + scale_x_log10() + scale_y_log10()),width=5,height=4)
+ppdf(plot(c(chr1data$gtrack(cmap.max=5e4),chr1_simdat$gtrack(cmap.max=5e4)),parse.gr('1')),width=5,height=10)
+#
+chr1ids = gr2dt(chr12mb$gr)[,id:=.I][seqnames==1]$id
+chr2ids = gr2dt(chr12mb$gr)[,id:=.I][seqnames==2]$id
+interchrom.dat = rbind(chr12mb$dat[(i %in% chr1ids) & (j %in% chr2ids)],chr12mb$dat[(j %in% chr1ids) & (i %in% chr2ids)])
+#
+interchrwalk = makewalk(c(parse.gr('1:1-1e8'),parse.gr('2:1-1e8')),list(1,1,2,2))
+interchrwalk_sim = forward_simulate(interchrwalk,target_region=streduce(interchrwalk$grl),pix.size=1e6,depth=rao.depth)
+chr1ids_sim = gr2dt(interchrwalk_sim$gr)[,id:=.I][seqnames==1]$id
+chr2ids_sim = gr2dt(interchrwalk_sim$gr)[,id:=.I][seqnames==2]$id
+noisy_interchrom = make_noisymap(interchrwalk_sim,theta=3)[[1]]
+interchrom.simdat = rbind(noisy_interchrom$dat[(i %in% chr1ids_sim) & (j %in% chr2ids_sim)],noisy_interchrom$dat[(j %in% chr1ids) & (i %in% chr2ids)])
+
+plotdat = rbind(interchrom.dat[,.(value,type='Hi-C')],interchrom.simdat[,.(value,type='Sim')])
+
+ppdf(plot(ggplot(plotdat[value < 1000]) + geom_histogram(aes(x=value,fill=type),bins=50,color='black',alpha=0.3,position='identity') + geom_vline(aes(xintercept = (interchrom.simdat$value %>% mean)),color='chartreuse4',linetype='dashed')),width=5,height=4)
