@@ -84,7 +84,6 @@ prep_for_sim <- function(walks,target_region=NULL,pix.size=1e5,if.comps=F){
 simulate_walks <- function(walks,tiled.target,widthdt,if.comps=F,mc.cores=1,if.sum=T,depth=1,model=0,if.interchr=T,gm.out=T){
     # walks is either a gWalk object or a list with elements: snode.id, circular
     # tiled.target is a gr2dt with metadata columns of tile.id, node.id, and cn
-
     # subset to walks that hit target region
     hit_target = unlist(lapply(walks$snode.id,function(w){length(intersect(unique(abs(w)),tiled.target$node.id)) > 0}))
     input_walks = list(graph = walks$graph,snode.id = walks$snode.id[hit_target], circular = walks$circular[hit_target])
@@ -243,7 +242,7 @@ calculate_interchrom <- function(intra.dts,walk.dts,tiled.target,walk.cn,if.comp
 #    })))
 #    mydat[,sum_sisj :=colSums(walk_nodecounts[,i, drop = FALSE] * walk_nodecounts[,j, drop = FALSE])]
     mydat[,value:=widthprod*raw_density*(titj)] #can subtract sum_sisj if no inter-contacts among same chrom nodes
-    intra_sum = sum_matrices(intra.dts)
+    intra_sum = sum_matrices(intra.dts, mc.cores = mc.cores)
     combdat = merge.data.table(mydat[,.(inter_value=value,id)],intra_sum[,.(i,j,intra_value=value,id)],by='id',allow.cartesian=T)[,value:=intra_value+inter_value]
     return(combdat[,.(i,j,id,value)])
 }
@@ -253,10 +252,45 @@ calculate_interchrom <- function(intra.dts,walk.dts,tiled.target,walk.cn,if.comp
 #' @param matrices list of data.tables of long-form gMatrices with columns i,j,id,value
 #' @return single data.table with same columns, with value column corresponding to the sum of all inputs for a given id
 #' NOTE: could be sped up with cpp
-sum_matrices <- function(matrices){
-    allmats = do.call(rbind,matrices)
-    allmats[,sumval:=sum(value),by='id']
-    outmat = unique(allmats[,.(i,j,id,value = sumval)])
+sum_matrices <- function(matrices, mc.cores = 1){
+
+  batch_attempts = c(20, 5, 2)
+    success = FALSE
+    error_msg = NULL
+
+    for (batch_size in batch_attempts) {
+      tryCatch({
+        message("Trying batch size: ", batch_size)
+        batches = split(matrices, ceiling(seq_along(matrices) / batch_size))
+
+        batch_sums = mclapply(batches, function(batch) {
+          rbindlist(batch)[, .(value = sum(value)), by = .(i, j, id)]
+        }, mc.cores = mc.cores)
+
+        outmat = rbindlist(batch_sums)[, .(value = sum(value)), by = .(i, j, id)]
+        success = TRUE
+        break
+      }, error = function(e) {
+        message("Failed at batch size ", batch_size, ": ", e$message)
+        error_msg <<- e$message
+      })
+    }
+    if (!success) {
+      stop("All batch sizes failed. Last error: ", error_msg)
+    }
+
+    
+    ## sum in batches
+    ## batches <- split(matrices, ceiling(seq_along(matrices) / 10))
+    ## batch_sums <- mclapply(batches, function(batch) {
+    ##   rbindlist(batch)[, .(value = sum(value)), by = .(i, j, id)]
+    ## }, mc.cores = 4)
+    ## outmat <- rbindlist(batch_sums)[, .(value = sum(value)), by = .(i, j, id)]
+
+    ## original:
+    ## allmats = do.call(rbind,matrices)
+    ## allmats[,sumval:=sum(value),by='id']
+    ## outmat = unique(allmats[,.(i,j,id,value = sumval)])
     return(outmat)
 }
 
