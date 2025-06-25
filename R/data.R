@@ -12,3 +12,6 @@
 
 # splines for Hi-C prediction
 'splineobj'
+
+# interchromosomal contact density at 1x
+'interchrom_density'
