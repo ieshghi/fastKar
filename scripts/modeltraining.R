@@ -64,21 +64,20 @@ rao.depth = (depthest.hic$value %>% sum)*300/3e9 #this is DIPLOID depth
 
 distmeans = readRDS(paste0(datafolder,'distmeans.rds'))
 maxval = 1e8
-library(gridExtra)
-nonorm_plot = plot(ggplot(distmeans[dist>0 & dist < maxval])+geom_point(aes(x=1/dist,y=value,color=log10(widthprod))) + scale_x_log10()+scale_y_log10() + labs(x='1/distance [1/bp]',y='counts',color='log(bin area)')+    theme(legend.position = "none"))
-norm_plot = plot(ggplot(distmeans[dist>0 & dist < maxval])+geom_point(aes(x=1/dist,y=value/widthprod,color=log10(widthprod))) + scale_x_log10()+scale_y_log10() + labs(x='1/distance [1/bp]',y='counts / bin area [1/bp^2]',color='log(bin area)'))
-ppdf(grid.arrange(nonorm_plot,norm_plot,nrow=1),width=10,height=4,filename='karyotype_inference/distance_normalization')
-
+plot_distmeans = rbind(distmeans[widthprod< 1e10 & dist > 5e6][seq(1, .N, by = 10)],distmeans[widthprod >= 1e10 | dist <= 5e6])
+self.hits = distmeans[dist==0]
+library(patchwork)
+nonorm_plot = ggplot(plot_distmeans[dist>0 & dist < maxval])+geom_point(aes(x=dist,y=value,color=log10(widthprod))) + scale_x_log10()+scale_y_log10() + labs(x='d [bp]',y='counts',color='log(bin area)')+theme(legend.position = "none")
+norm_plot = ggplot(plot_distmeans[dist>0 & dist < maxval])+geom_point(aes(x=dist,y=value/widthprod,color=log10(widthprod))) + scale_x_log10()+scale_y_log10() + labs(x='d [bp]',y='counts / area [1/bp^2]',color='log(bin area)') 
+diag_plot = ggplot(self.hits) + geom_point(aes(x=widthprod,y=value)) + geom_line(aes(x=widthprod,y=6e-3*(widthprod)^(2/3)),linetype='dashed')+ scale_x_log10() + scale_y_log10() + labs(x='Bin area [bp^2]',y='Diagonal Hi-C counts') 
+#ppdf(print(plot_grid(nonorm_plot,norm_plot,diag_plot,nrow=1,align = "hv", axis = "tblr")),width=12,height=3,filename='karyotype_inference/distance_normalization')
+y = (nonorm_plot + norm_plot + diag_plot )
+ppdf(print(y
+  ),width=14,height=3,filename='karyotype_inference/distance_normalization')
 #Okay great, we have area dependence
 
-# what about self-contacts
-self.hits = distmeans[dist==0]
-ppdf(plot(ggplot(self.hits) + geom_point(aes(x=widthprod,y=value)) + geom_line(aes(x=widthprod,y=1e-2*(widthprod)^(2/3)),linetype='dashed')+ scale_x_log10() + scale_y_log10()
- + labs(x='Bin area [bp^2]',y='Diagonal Hi-C counts')), 
-width=5,height=3,filename='karyotype_inference/diagonal_areadep')
-
 #train a spline function for distance decay
-dist.splinedat = distmeans[dist>0]
+dist.splinedat = distmeans[dist>0 & widthprod==1e8]
 dist.splinedat[,x:=log(dist)]
 dist.splinedat[,y:=log(value/(2*rao.depth*widthprod))] #Factor of 2 is important!! 1500x is the depth of the Rao sequencing, but it is "diploid" depth, while we are trying to simulate depth of single alleles
 spline_dist = splinefun(dist.splinedat$x,dist.splinedat$y)

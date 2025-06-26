@@ -123,7 +123,6 @@ simulate_walks <- function(walks,tiled.target,widthdt,if.comps=F,mc.cores=1,if.s
         transfmat.spr = sparseMatrix(i=this.dt[!is.na(orig.id)]$tile.id,j=this.dt[!is.na(orig.id)]$orig.id,x=1,dims=c(nrow(this.dt),nrow(tiled.target))) #this sparse matrix gives us the lift back to reference. Since all bins in liftedwalk are subsets of bins in merwalk, this is just a matrix of ones, but each bin in merwalk can have multiple bins in liftedwalk point to it, so each column can have multiple 1s in it.
         #
         local_sim = simulate_map(this.dt,input_walks$circular[ii],model=model) #run the simulator, get a gMatrix in local coordinates
-
         if (nrow(local_sim)){
             #
             localmat = sparseMatrix(i=local_sim$i,j=local_sim$j,x=local_sim$value) %>% symmetrize #convert to a matrix and symmetrize
@@ -190,7 +189,8 @@ simulate_map<-  function(walk.dt,is.circular=FALSE,model=0){
         #return what the data would be at 1500x depth, adjust accordingly
    }
    dat.new[is.na(value),value:=0]
-   return(dat.new[,.(i,j,value,id)])
+#   return(dat.new[,.(i,j,value,id)])
+   return(dat.new[,.(i,j,value,id,dist)])
 }
 
 #' Evaluate compartment identity of all tiles
