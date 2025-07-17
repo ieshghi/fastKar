@@ -60,7 +60,7 @@ saveRDS(distmeans,paste0(datafolder,'distmeans.rds'))
 hic.file = '/gpfs/commons/groups/imielinski_lab/data/PoreC/Rao2014/4DNFI1UEG1HD.hic'
 wholegenome = gr.tile(si2gr(hg_seqlengths()[1:24]),1e7)
 depthest.hic = straw(hic.file,res=as.integer(1e7),gr=wholegenome)
-rao.depth = (depthest.hic$value %>% sum)*300/3e9 #this is DIPLOID depth
+rao.haploid.depth = (depthest.hic$value %>% sum)*300/6e9 #this is HAPLOID depth, depth of sequencing per unique base pair (assuming we can tell the difference between alleles)
 
 distmeans = readRDS(paste0(datafolder,'distmeans.rds'))
 maxval = 1e8
@@ -79,7 +79,7 @@ ppdf(print(y
 #train a spline function for distance decay
 dist.splinedat = distmeans[dist>0 & widthprod==1e8]
 dist.splinedat[,x:=log(dist)]
-dist.splinedat[,y:=log(value/(2*rao.depth*widthprod))] #Factor of 2 is important!! 1500x is the depth of the Rao sequencing, but it is "diploid" depth, while we are trying to simulate depth of single alleles
+dist.splinedat[,y:=log(value/(2*rao.haploid.depth*widthprod))] #factor of two because GM12878 is in fact diploid
 spline_dist = splinefun(dist.splinedat$x,dist.splinedat$y)
 
 #make a plot showing the quality of the fit
@@ -92,7 +92,7 @@ filename='karyotype_inference/spline_fit')
 
 diag.splinedat = distmeans[dist==0]
 diag.splinedat[,x:=log(widthprod)]
-diag.splinedat[,y:=log(value/(2*rao.depth))] #Again, we have a factor of 2 from the DIPLOID coverage
+diag.splinedat[,y:=log(value/(2*rao.haploid.depth))] #factor of two because GM12878 is in fact diploid
 diag_model <- lm(diag.splinedat$y ~ diag.splinedat$x)
 coeffs <- coef(diag_model)
 spline_diag <- eval(substitute(
@@ -118,7 +118,7 @@ dat[,interchrom:=!((gr.dt[i]$seqnames)==(gr.dt[j]$seqnames))]
 # assuming density is ~constant, we just calculate total interchromosomal area, get total counts and divide by that
 interchr.area = as.numeric(width(parse.gr('1')))*width(parse.gr('2')) #just a check
 total.interchrom.hits = dat[interchrom==TRUE]$value %>% sum
-interchrom_density = total.interchrom.hits/(interchr.area * rao.depth * 4)
+interchrom_density = total.interchrom.hits/(interchr.area * rao.haploid.depth * 4)
 # each allele has 750x coverage, then interchromosomal hits at position i,j go like density* CN(i) * CN(j) * area
 
 #just checking we're getting the density more or less right
