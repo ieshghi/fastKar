@@ -118,7 +118,7 @@ dat[,interchrom:=!((gr.dt[i]$seqnames)==(gr.dt[j]$seqnames))]
 # assuming density is ~constant, we just calculate total interchromosomal area, get total counts and divide by that
 interchr.area = as.numeric(width(parse.gr('1')))*width(parse.gr('2')) #just a check
 total.interchrom.hits = dat[interchrom==TRUE]$value %>% sum
-interchrom_density = total.interchrom.hits/(interchr.area * rao.haploid.depth * 2)
+interchrom_density = total.interchrom.hits/(interchr.area * rao.haploid.depth * 8)
 
 #just checking we're getting the density more or less right
 old_data = readRDS('~/Projects/contacts_sv_correction/data/100kb_lookupfile.rds')
