@@ -1,4 +1,4 @@
-f1score_comparemaps <- function(null_map,hyp_map,theta=3,significance = 0.05,return_samples=FALSE,mask=NULL){
+f1score_comparemaps <- function(null_map,hyp_map,theta=2,significance = 0.05,return_samples=FALSE,mask=NULL){
   if (!is.null(mask)){
       gr = null_map$gr %&% mask
       bad.inds = gr$tile.id
@@ -11,7 +11,7 @@ f1score_comparemaps <- function(null_map,hyp_map,theta=3,significance = 0.05,ret
       null_map = gM(gr = null_map$gr,dat=nulldat)
       hyp_map = gM(gr = hyp_map$gr,dat=dat)
   }
-  num_samples = 10/significance
+  num_samples = 4/significance
   samples = lapply(list(null_map,hyp_map),function(m){make_noisydat(m,num_samples,theta)}) #samples to classify}
   likelihooddiff = lapply(samples,function(s){
                    unlist(lapply(s,function(ss){
@@ -31,7 +31,27 @@ f1score_comparemaps <- function(null_map,hyp_map,theta=3,significance = 0.05,ret
   }
 }
 
-test.walks.with.hic <- function(walkset,hic.data,resolution=1e5,mc.cores=1,depth.est,target_region=NULL,if.diag=TRUE,return='scores',mask=NULL){
+kl_nb <- function(mu1, mu2, r=2,tinyval=1e-10) { #get KL divergence between two sets of negative binomials
+  mu1 <- as.numeric(pmax(mu1,tinyval))
+  mu2 <- as.numeric(pmax(mu2,tinyval))
+  stopifnot(length(mu1) == length(mu2))
+  
+  kl <- mu1*log(mu1/mu2) + (r+mu1)*log((r+mu2)/(r+mu1))
+  kl[kl<0] = 0
+  return(sum(kl))
+}
+
+klsymm_nb <- function(mu1, mu2, r=2,tinyval=1e-10) { #get KL divergence between two sets of negative binomials
+  mu1 <- as.numeric(pmax(mu1,tinyval))
+  mu2 <- as.numeric(pmax(mu2,tinyval))
+  stopifnot(length(mu1) == length(mu2))
+  
+  kl <- (mu1-mu2)*log((mu1/mu2)*((r+mu2)/(r+mu1)))
+  kl[kl<0] = 0
+  return(sum(kl))
+}
+
+test.walks.with.hic <- function(walkset,hic.data,resolution=1e5,mc.cores=1,depth.est=1,target_region=NULL,if.diag=TRUE,return='scores',mask=NULL){
     if(!is.list(walkset)){
         stop('Give me multiple walks with the same footprint in a list to compare!')
     }
@@ -42,22 +62,22 @@ test.walks.with.hic <- function(walkset,hic.data,resolution=1e5,mc.cores=1,depth
     predictions = mclapply(walkset,function(w){
         return(forward_simulate(w,target_region=target_region,if.comps=F,pix.size=resolution,mc.cores=1,if.sum=T,depth=depth.est,model=0))
     },mc.cores=mc.cores)
-    rebin.data = (hic.data$disjoin(predictions[[1]]$gr))$agg(predictions[[1]]$gr,weighted=TRUE) #make sure data is aggregated on the same GRanges as the predictions
+    rebin.data = (hic.data$disjoin(predictions[[1]]$gr))$agg(predictions[[1]]$gr) #make sure data is aggregated on the same GRanges as the predictions
 
     if (return=='scores'){
-        scores = mclapply(predictions,function(pred){compmaps(rebin.data,pred,ifsum=TRUE,theta=3,if.diag=if.diag,mask=mask)},mc.cores=mc.cores)
+        scores = mclapply(predictions,function(pred){compmaps(rebin.data,pred,ifsum=TRUE,theta=2,if.diag=if.diag,mask=mask)},mc.cores=mc.cores)
         return(scores)
     } else if (return=='scoremaps'){
-        scoremaps = mclapply(predictions,function(pred){compmaps(rebin.data,pred,ifsum=FALSE,theta=3,if.diag=if.diag,mask=mask)},mc.cores=mc.cores)
+        scoremaps = mclapply(predictions,function(pred){compmaps(rebin.data,pred,ifsum=FALSE,theta=2,if.diag=if.diag,mask=mask)},mc.cores=mc.cores)
         return(scoremaps)
     } else if (return=='predictions'){
         return(predictions)
     } else if (return == 'sp') {
-        scores = mclapply(predictions,function(pred){compmaps(pred,rebin.data,ifsum=TRUE,theta=3,if.diag=if.diag,mask=mask)},mc.cores=mc.cores)
+        scores = mclapply(predictions,function(pred){compmaps(pred,rebin.data,ifsum=TRUE,theta=2,if.diag=if.diag,mask=mask)},mc.cores=mc.cores)
         return(list(scores = scores, predictions = predictions, hic.data = rebin.data))
     } else if (return == 'all') {
-        scores = mclapply(predictions,function(pred){compmaps(pred,rebin.data,ifsum=TRUE,theta=3,if.diag=if.diag,mask=mask)},mc.cores=mc.cores)
-        scoremaps = mclapply(predictions,function(pred){compmaps(pred,rebin.data,ifsum=FALSE,theta=3,if.diag=if.diag,mask=mask)},mc.cores=mc.cores)
+        scores = mclapply(predictions,function(pred){compmaps(pred,rebin.data,ifsum=TRUE,theta=2,if.diag=if.diag,mask=mask)},mc.cores=mc.cores)
+        scoremaps = mclapply(predictions,function(pred){compmaps(pred,rebin.data,ifsum=FALSE,theta=2,if.diag=if.diag,mask=mask)},mc.cores=mc.cores)
         return(list(scores = scores, predictions = predictions, scoremaps = scoremaps, hic.data = rebin.data))
     }
 }
@@ -85,8 +105,11 @@ compmaps <- function(map_test,map_true,theta=0,ifsum=FALSE,ifscale = FALSE,if.di
     }
 }
 
-estimate.depthratio <- function(filepath,mode='hic',res=1e6,ploidy=2){ #put here hic data for a whole genome
+estimate.depthratio <- function(filepath,mode='hic',res=1e6,ploidy=2,if.chr=FALSE){ #put here hic data for a whole genome
     wholegenome = gr.tile(si2gr(hg_seqlengths()[1:24]),res)
+    if (if.chr){
+        wholegenome = gr.chr(wholegenome)
+    }
     if (mode=='hic'){
         depthest.hic = straw(filepath,res=as.integer(res),gr=wholegenome)
     }else if (mode=='mcool'){

@@ -1,4 +1,5 @@
 #TODO for all inference methods: make some hashing method so that user can look at all the sampled walk sets and their respective NLLs
+
 #maybe write a method to preprocess hic data and estimate depth...?
 infer.walks <- function(graph,hic.data,depth,stepping_mode='dumb',temperature=1,init_walk = NULL,return.vals='walks',num.iter=100,pix.size=0){
     wiring = gg.to.wiring(graph) #make a wiring object
@@ -70,6 +71,9 @@ get_or_calc_loss <- function(newwalk,hic.data.rebin,prepped.data,depth,walkhist,
 #goes from a ggraph to a "wiring", which gives all the internal edges of the graph (going from left side of a node to right side)
 #along with the loose node ids and a reference data table with the new node ids (all copies of each node are de-duplicated)
 gg.to.wiring <- function(gg){ 
+  if (!(('loose.cn.left' %in% colnames(gg$dt)) & ('loose.cn.right' %in% colnames(gg$dt)))){
+    gg = balance(gg$copy)
+  }
   nodesdt = gg$nodes$dt[,.(start,end,seqnames,snode.id,cn,loose.cn.left,loose.cn.right)]
   nodesgr = gg$nodes$gr[,c('snode.id','cn')]
   edgesdt = gg$edges$dt[,.(cn,n1,n2,n1.side,n2.side,type)]
@@ -94,79 +98,6 @@ gg.to.wiring <- function(gg){
 }
 
 # given a wiring, with internal edges and loose ends, traverse graph and return paths and cycles
-traverse_graph <- function(A, loose.ends) {
-  visited_edges <- c()
-  visited_rows <- c()
-  traversed_paths <- list()
-  # Only process loose ends that haven't been traversed
-  remaining_loose_ends <- setdiff(loose.ends, visited_edges)
-  while (length(remaining_loose_ends) > 0) {
-    start_edge <- remaining_loose_ends[1]  # Pick an unvisited loose end
-    path <- c()
-    nodepath <- c()
-    current_edge <- start_edge
-    while (!is.na(current_edge) && !(current_edge %in% remaining_loose_ends && length(path) > 0)) {
-      path <- c(path, current_edge)
-      visited_edges <- c(visited_edges, current_edge)
-      
-      # Find the row where current_edge appears in 'left' or 'right'
-      row <- A[(left == current_edge | right == current_edge) & !(id %in% visited_rows)]
-      visited_rows <- c(visited_rows,row$id)
-      # Determine the next edge
-      if (row$left == current_edge) {
-        nodepath <- c(nodepath,row$n)
-        next_edge <- row$right
-      } else {
-        nodepath <- c(nodepath,-row$n)
-        next_edge <- row$left
-      }
-      # Find the next occurrence of next_edge (excluding current row)
-      next_row <- A[(left == next_edge | right == next_edge) & !(id %in% visited_rows)]
-      if (nrow(next_row) == 0){ 
-        visited_edges = c(visited_edges,next_edge) 
-        path = c(path,next_edge) 
-        break  # No more paths
-      } 
-      current_edge <- next_edge  # Move to the next edge
-    }
-    traversed_paths = append(traversed_paths,list(nodepath))
-    remaining_loose_ends <- setdiff(loose.ends, visited_edges)  # Update unvisited loose ends
-  }
-  #now we detect cycles
-  remaining_edges <- A[!(id %in% visited_rows)]
-  cycles <- list()
-  while (nrow(remaining_edges) > 0) {
-    start_edge <- remaining_edges$right[1]  # Pick an unvisited edge
-    visited_rows = c(visited_rows,remaining_edges$id[1])
-    path <- c()
-    nodepath = c(remaining_edges$n[1])
-    current_edge <- start_edge
-    while (!is.na(current_edge)) {
-      path <- c(path, current_edge)
-      # Find the row containing this edge
-      row <- remaining_edges[(left == current_edge | right == current_edge) & !(id %in% visited_rows)]
-      if (nrow(row) == 0) {
-        cycles <- append(cycles, list(nodepath))
-        break
-      }
-      visited_rows <- c(visited_rows,row$id)
-      # Determine the next edge
-      if (row$left == current_edge) {
-        nodepath <- c(nodepath,row$n)
-        next_edge <- row$right
-      } else {
-        nodepath <- c(nodepath,-row$n)
-        next_edge <- row$left
-      }
-      # If we revisit an edge, a cycle is found
-      current_edge <- next_edge  # Move to next edge
-    }
-    # Remove visited edges from remaining_edges
-    remaining_edges <- remaining_edges[!(id %in% visited_rows)]
-  }
-  return(list(paths=traversed_paths,cycles=cycles))
-} # ---> to be made into a Rcpp function for faster evaluation
-
 cppFunction('List traverse_graph_cpp(DataFrame A, NumericVector loose_ends) {
   // Extract columns from the data frame
   IntegerVector n = A["n"];
@@ -202,6 +133,7 @@ cppFunction('List traverse_graph_cpp(DataFrame A, NumericVector loose_ends) {
     std::vector<int> path;
     std::vector<int> nodepath;
     int current_edge = start_edge;
+
     
     while (true) {
       path.push_back(current_edge);
@@ -336,53 +268,153 @@ cppFunction('List traverse_graph_cpp(DataFrame A, NumericVector loose_ends) {
       }
     }
   }
+
+  int n_paths = traversed_paths.size();
+  int n_cycles = cycles.size();
+  int n_total = n_paths + n_cycles;
+  List combined(n_total);
+  LogicalVector circular(n_total);
+
+  for (int i = 0; i < n_paths; i++) {
+      combined[i] = traversed_paths[i];
+      circular[i] = false;
+  }
+
+  for (int i = 0; i < n_cycles; i++) {
+      combined[n_paths + i] = cycles[i];
+      circular[n_paths + i] = true;
+  }
   
-  // Construct and return the result list
-  List result;
-  result["paths"] = traversed_paths;
-  result["cycles"] = cycles;
-  return result;
+  return List::create(
+      _["snode.id"] = combined,
+      _["circular"] = circular
+  );
 }
 ')
-
-# one possible addition: check for identical walks and de-dup them, return walk.cn
-walks.from.edges <- function(wiring,shuffle=0,return.gw = FALSE,ifcpp=TRUE,return_edges=F){ #wrapper function
-  internal.edges = wiring$internal.edges
-  loose.ends = wiring$loose.ends
-  gg = wiring$gg
-  edges = data.table::copy(internal.edges) 
-  if (shuffle==1){
-    edges[,right:=ifelse(cn>1,sample(right,size=unique(cn)),right),by=n] #shuffle rewiring
-  } else if (shuffle==2){
-    nswap = sample(edges[cn>1]$n,1)
-    edges[n==nswap,sright:=sample(right,unique(cn))]
-    edges[,right:=ifelse(is.na(sright),right,sright)][,sright:=NULL]
-  } else if (shuffle < 0){
-    nswap = -shuffle
-    edges[n==nswap,sright:=sample(right,unique(cn))]
-    edges[,right:=ifelse(is.na(sright),right,sright)][,sright:=NULL]
-  }
-  if (ifcpp){
-    walks.out = traverse_graph_cpp(edges,loose.ends)
-  } else{
-    walks.out = traverse_graph(edges,loose.ends)
-  }
-  if (return.gw){
-    walks_out = c(gW(graph=gg,snode.id=walks.out$paths),gW(graph=gg,snode.id=walks.out$cycles,circular=TRUE))
-  }else{
-    circular = c(rep(F,length(walks.out$paths)),rep(T,length(walks.out$cycles)))
-    snode.id = c(walks.out$paths,walks.out$cycles)
-    walks.out = list(graph=gg,snode.id=snode.id,circular=circular)
-  }
-  if(return_edges){
-    return(list(walks = walks.out,edges=edges))
-  }else{
-    return(walks.out)
-  }
-}
 
 sample_nlls <- function(nll_vals) {
   liks = exp(-nll_vals)
   probs = liks/sum(liks)
   return(sample(1:length(probs),size=1,prob=probs))
+}
+
+#sample gWalks from graph gg, take N samples and return all unique permutations among them
+
+sample.gwalks = function(gg,N=1,mc.cores=1,chunksize = 1e3,return.gw=T){ 
+  wiring = gg.to.wiring(gg)
+  internal.edges = wiring$internal.edges
+  loose.ends = wiring$loose.ends
+  message('Sampling permutations')
+
+  shuffle_edges <- function(edges) {
+    new_right <- edges[, if (.N > 1) sample(right, .N) else right, by = n]$V1
+  }
+  shuffle_chunk <- function(K, edges) {
+    replicate(K, shuffle_edges(edges), simplify = FALSE)
+  }
+  chunks <- N %/% chunksize
+  if (chunks > 1){
+  	perms <- do.call('c',pbmclapply(seq_len(chunks), function(i) shuffle_chunk(chunksize, internal.edges),mc.cores = mc.cores))
+  }else{
+  	perms <- pbmclapply(seq_len(N), function(i) shuffle_edges(internal.edges),mc.cores = mc.cores)
+  }
+  message('Hashing and keeping unique permutations')
+  hashes = unlist(lapply(perms,digest))
+
+  message('Generating walks')
+  dt = data.table(hash=hashes,idx=1:N)[,id:=1:.N,by=hash]
+  uniqueperms = perms[dt[id==1]$idx]
+  permchunks = split(uniqueperms, ceiling(seq_along(uniqueperms)/chunksize))
+  makewalk_chunk <- function(permchunk) {
+    ws = lapply(permchunk,function(p){traverse_graph_cpp(internal.edges[,right:=p],loose.ends)})
+    if (return.gw){
+      ws = lapply(ws,function(w){gW(graph=gg,snode.id=w$snode.id,circular=w$circular)})
+    }
+    return(ws)
+  }
+  walks.out <- do.call('c',pbmclapply(permchunks, makewalk_chunk,mc.cores = mc.cores))
+  return(walks.out)
+}
+
+
+hash_snodelist = function(snode.id,circular){
+  circ = ifelse(rep(circular,2),'C','L')
+  nodepcomp = c(snode.id,lapply(snode.id,function(s){-rev(s)}))
+  nodestring = lapply(1:length(nodepcomp),function(i){
+    paste0(toString(nodepcomp[[i]]),circ[i])
+  })
+  return(toString(sort(do.call('c',nodestring))))
+}
+
+sort_snodes = function(nodelist,arr=NULL) {
+  choose_compl = lapply(nodelist, function(x) {
+    rc = -rev(x)
+    if (paste(x, collapse = ",") <= paste(rc, collapse = ",")) {
+      x
+    } else {
+      rc
+    }
+  })
+  ord <- order(sapply(choose_compl, paste, collapse = ","))
+  sorted_nodes = choose_compl[ord]
+  if (!is.null(arr)){
+    sorted_arr = arr[ord]
+    return(list(nodelist=sorted_nodes,arr=sorted_arr))
+  }else{
+    return(sorted_nodes)
+  }
+}
+
+collapse_gwalklist <- function(gwlist,bands.gr,graph,min.wid=1e3,mc.cores=1,chunksize=1e3){
+  gr = graph$nodes$gr[,c('snode.id')]
+  merged.dt = gr2dt(gr.merge(gr,bands.gr)[,c('query.id','subject.id')])[,.(node.id=query.id,band.id=subject.id,width=width,seqnames,start,end)]
+
+  gw.chunks <- split(gwlist, ceiling(1:length(gwlist) / chunksize))
+  collapsed.list = pblapply(gw.chunks, function(chunk) {
+    collapsed.chunk = mclapply(chunk, function(gw){
+      walknodes = gw$snode.id
+      circular = gw$circular
+      sorted = sort_snodes(walknodes,arr=circular)
+      walknodes_sorted = sorted$nodelist
+      circular = sorted$arr
+      collapsed.walk = lapply(walknodes_sorted,function(x){
+        walk = merge.data.table(data.table(order = 1:length(x),node.id = abs(x), strand = sign(x)),merged.dt,by='node.id')[,step.id:=.I]
+        walk = walk[width>min.wid]
+        # we should do something more sophisticated to simulate blurriness!!!
+        if (nrow(walk)){
+          walk[strand<0,step.id:=rev(step.id),by=order]
+          setkeyv(walk,c('order','step.id'))
+          bandsvec = walk$band.id
+          nodup_inds = c(TRUE, diff(bandsvec) != 0)
+          bandsvec_nodup = bandsvec[nodup_inds]
+          strandvec_nodup = walk$strand[nodup_inds]
+          return(strandvec_nodup*bandsvec_nodup)
+        }else{
+          return(NULL)
+        }
+      })
+      keep = do.call('c',lapply(collapsed.walk,function(x){!is.null(x)}))
+      sorted = sort_snodes(collapsed.walk[keep],arr=circular[keep])
+      return(list(band.id = sorted$nodelist,circular = sorted$arr,hash=hash_snodelist(sorted$nodelist,sorted$arr)))
+      }, mc.cores=mc.cores)
+      return(collapsed.chunk)
+      })
+      return(do.call('c',collapsed.list))
+}
+
+#should introduce a threshold width for removing del/dups
+smoothdeldups = function(ggraph){
+	dup_junctions = ggraph$edgesdt[!is.na(ggraph$edgesdt$dup)][n1==n2]
+	del_junctions = ggraph$edgesdt[!is.na(ggraph$edgesdt$del)][abs(n1-n2)==2]
+	del_junctions[,this.n:=round((n1+n2)/2)]
+	nodesgr = ggraph$nodes$gr
+	cnvec = nodesgr$cn
+	cnvec[dup_junctions$n1] = cnvec[dup_junctions$n1]-dup_junctions$cn
+	cnvec[del_junctions$this.n] = cnvec[del_junctions$this.n]+del_junctions$cn
+	nodesgr$cn = cnvec
+	nagraph = ggraph$copy
+	nagraph$nodes$mark(cn=NA)
+	nagraph$edges$mark(cn=NA)
+	nodeldups = balance(nagraph,marginal=nodesgr,verbose=0)[,cn>0]
+	return(loosefix(nodeldups)$simplify())
 }

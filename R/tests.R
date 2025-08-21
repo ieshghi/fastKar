@@ -75,10 +75,15 @@ makerepdup <- function(regsize,geometry){
   return(walk)
 }
 
-makewalk <- function(tiles,nodewalk,background = FALSE){
+makewalk <- function(tiles,nodewalk,circ=FALSE,background = FALSE,stranded=TRUE){
   segments = gG(nodes=tiles)$gr[,c()]
   segments$node.id = 1:length(segments)
   if (is.list(nodewalk)){
+    if (length(circ)==1){
+      circ = rep(circ,length(nodewalk))
+    } else if(length(circ)!=length(nodewalk)){
+      stop('Declare circular array of length 1 or equal to number of walks')
+    }
     walk.gr = lapply(nodewalk,function(w){
       s = rep('+',length(w))
       wa = abs(w)
@@ -96,11 +101,12 @@ makewalk <- function(tiles,nodewalk,background = FALSE){
       walk.gr = out
   }
   if (background){
+    circ = c(circ,rep(FALSE,background))
     norm.gr = segments %Q% (strand=='+')
-    walk = gW(grl = GRangesList(walk.gr,norm.gr))
+    walk = gW(grl = GRangesList(walk.gr,norm.gr),circular=circ)
     walk$set(cn=c(1,as.numeric(background)))
   }else{
-    walk = gW(grl = GRangesList(walk.gr))
+    walk = gW(grl = GRangesList(walk.gr),circular=circ)
     walk$set(cn=1)
   }
   walk$nodes$mark(cn=1)

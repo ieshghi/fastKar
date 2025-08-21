@@ -1,4 +1,5 @@
 # In this file I define some functions used in the prediction of 3D structure at rearrangements.
+
 #' Simulate the Hi-C data of a set of gWalks in reference coordinates using the fastKar framework
 #' 
 #' @param walks either a gGnome::gWalk or a list containing objects "graph" (a gGnome gGraph), "snode.id" (a list of arrays of node.ids inside "graph" in their walk order), and "circular" (an array of booleans indicating the circularity of the walks)
@@ -184,9 +185,8 @@ simulate_map<-  function(walk.dt,is.circular=FALSE,model=0){
         dat.new[dist>maxval,value:=widthprod*maxval_density*maxval/dist] #assume 1/distance scaling for values > 1e8
    }else {
         min.res = min(fastKar::small_lookup[d>0]$d)
-        dat.new[,value:=widthprod*1500/(10*min.res^2)*(exp(-this.d/model))]
+        dat.new[,value:=widthprod/(10*min.res^2)*(exp(-dist/model))]
         #some analytical model for short/long reads with readlength as an input parameter
-        #return what the data would be at 1500x depth, adjust accordingly
    }
    dat.new[is.na(value),value:=0]
 #   return(dat.new[,.(i,j,value,id)])
