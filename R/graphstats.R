@@ -1,73 +1,5 @@
 #TODO for all inference methods: make some hashing method so that user can look at all the sampled walk sets and their respective NLLs
 
-#maybe write a method to preprocess hic data and estimate depth...?
-infer.walks <- function(graph,hic.data,depth,stepping_mode='dumb',temperature=1,init_walk = NULL,return.vals='walks',num.iter=100,pix.size=0){
-    wiring = gg.to.wiring(graph) #make a wiring object
-  if(is.null(init_walk)){
-    init_walk = walks.from.edges(wiring,1) #start at a random first walk decomposition
-  }
-  prepped.data = prep_for_sim(init_walk,pix.size=pix.size) #some tiling and prep information
-  init_sim = simulate_walks(init_walk,prepped.data$tiled.target,prepped.data$widthdt,depth=depth,gm.out=T) #get an initial gMatrix from the initial walkset
-  hic.data.rebin = (hic.data$disjoin(init_sim$gr))$agg(init_sim$gr)
-  hashlookup = new.env(hash = TRUE, parent = emptyenv()) #initialize environment to store walk hashes
-
-  bestwalk = init_walk
-  init_loss = compdats(hic.data.rebin$dat,init_sim$dat,theta=2)
-  init_hash = digest(init_walk, algo = "sha256")
-  assign(init_hash, init_walk, envir = hashlookup) 
-  walkhist = data.table(losses=init_loss,hashes=init_hash)
-  cts = 0
-  pb = txtProgressBar(min=0,max=num.iter,initial=0)
-  for(cts in 1:num.iter){
-    setTxtProgressBar(pb,cts)
-    if (stepping_mode=='dumb'){ #dumb = just pick a random new walk
-      newwalk = walks.from.edges(wiring,shuffle=1)
-      loss_and_hash = get_or_calc_loss(newwalk,hic.data.rebin,prepped.data,depth,walkhist,hashlookup)
-      thisloss = loss_and_hash$thisloss
-      thishash = loss_and_hash$thisloss
-    } else if (stepping_mode=='metrop'){ #something like a metropolis
-      proposal = walks.from.edges(wiring,shuffle=2) #assume all walks "one move away" are equally likely, and all other walks are p=0
-      prop_calc = get_or_calc_loss(proposal,hic.data.rebin,prepped.data,depth,walkhist,hashlookup)
-      oldloss = walkhist[cts-1]$losses
-      proploss = prop_calc$thisloss
-      acc_prob = min(1,exp((-proploss + oldloss)/temperature))
-      if (as.numeric(rand()) < acc_prob){ #metropolis-like condition: if you're doing better, move forward with some probability
-        thisloss = proploss
-        thishash = prop_calc$thishash 
-        newwalk = proposal
-      } else{ #otherwise, stay where you are
-        thisloss = oldloss
-        thishash = walkhist[cts-1]$hashes
-      }
-    } else if (stepping_mode== 'guided'){
-      # do smart stuff here
-    }
-    if(thisloss < min(walkhist$losses)){
-      bestwalk = newwalk
-    }
-    walkhist = rbind(walkhist,data.table(losses=thisloss,hashes=thishash))
-  }
-  close(pb)
-  if(return.vals=='walks'){
-    return(bestwalk)
-  }else if(return.vals=='all'){
-    return(list(bestwalk = bestwalk,walkhist=walkhist,hashlookup=hashlookup))
-  }
-}
-
-get_or_calc_loss <- function(newwalk,hic.data.rebin,prepped.data,depth,walkhist,hashlookup){
-    thishash = digest(newwalk, algo='sha256')
-    if(thishash %in% walkhist$hashes){
-      firsttime = which((walkhist$hashes)==thishash)[1]
-      thisloss = walkhist[firsttime]$losses
-    } else{
-      newsim = simulate_walks(newwalk,prepped.data$tiled.target,prepped.data$widthdt,depth=depth,gm.out=F)
-      thisloss = compdats(hic.data.rebin$dat,newsim$dat,theta=2)
-      assign(thishash,newwalk,envir=hashlookup)
-    }
-    return(list(thisloss = thisloss,thishash=thishash))
-}
-
 #goes from a ggraph to a "wiring", which gives all the internal edges of the graph (going from left side of a node to right side)
 #along with the loose node ids and a reference data table with the new node ids (all copies of each node are de-duplicated)
 gg.to.wiring <- function(gg){ 
@@ -292,12 +224,6 @@ cppFunction('List traverse_graph_cpp(DataFrame A, NumericVector loose_ends) {
 }
 ')
 
-sample_nlls <- function(nll_vals) {
-  liks = exp(-nll_vals)
-  probs = liks/sum(liks)
-  return(sample(1:length(probs),size=1,prob=probs))
-}
-
 #sample gWalks from graph gg, take N samples and return all unique permutations among them
 
 sample.gwalks = function(gg,N=1,mc.cores=1,chunksize = 1e3,return.gw=T){ 
@@ -417,4 +343,40 @@ smoothdeldups = function(ggraph){
 	nagraph$edges$mark(cn=NA)
 	nodeldups = balance(nagraph,marginal=nodesgr,verbose=0)[,cn>0]
 	return(loosefix(nodeldups)$simplify())
+}
+
+cardinality_estimate = function(ggraph,samplesize,min.wid=5e6,region=NULL,datafolder=NULL,bandsfile = "/gpfs/commons/groups/imielinski_lab/DB/UCSC/hg38.cytoband.txt",mc.cores=1){
+	if (is.null(region)){
+		region = si2gr(hg_seqlengths(chr=FALSE)) %Q% (seqnames %in% c(1:22,'X','Y'))
+	}
+	finalgraph = smoothdeldups(ggraph %&% region)
+
+	walkset = sample.gwalks(finalgraph,samplesize,return.gw=F,mc.cores=mc.cores)
+	hashes = pbmclapply(walkset,function(gw){hash_snodelist(gw$snode.id,gw$circular)},mc.cores=mc.cores)
+	hash.dt = data.table(hashes=unlist(hashes))
+	hash.dt[,count:=.N,by=hashes]
+	estimate_card = chao1(unique(hash.dt)$count)
+	
+	#do these walks collapse
+	idx = hash.dt[,.I[1],by=hashes]$V1
+	bands.td = gTrack::karyogram(file = bandsfile)
+	bands = bands.td@data
+	bands = gr.nochr(grl.unlist(do.call(`GRangesList`, bands)))
+	bands = bands %Q% (seqnames %in% c(1:22,'X','Y'))
+	bands = dt2gr(gr2dt(bands)[,start:=start+1],seqlengths=seqlengths(bands))
+	
+	collapsed.walks = collapse_gwalklist(walkset[idx],bands,finalgraph,min.wid=min.wid,mc.cores=mc.cores,chunksize=1e3)
+	
+	coll_hashes = sapply(collapsed.walks, `[[`, "hash")
+	coll_hash.dt = data.table(hashes=unlist(coll_hashes))
+	coll_idx = coll_hash.dt[,.I[1],by=hashes]$V1
+	coll_hash.dt[,count:=.N,by=hashes]
+	coll_hash.dt[,countcount:=.N,by=count]
+	coll_hash.dt = unique(coll_hash.dt)
+	counttable = unique(coll_hash.dt[,.(count,countcount)])
+	coverage = 1 - (counttable[count==1]$countcount)/(counttable$countcount %>% sum)
+	setkeyv(coll_hash.dt,'count')
+	estimate_coll_card = chao1(coll_hash.dt$count)
+
+	return(list(card.estimate = estimate_coll_card,coverage=coverage,chao_reliability = reliability,collapsed.walks=collapsed.walks,bands=bands))
 }
