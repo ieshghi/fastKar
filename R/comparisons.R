@@ -35,7 +35,6 @@ kl_nb <- function(mu1, mu2, r=2,tinyval=1e-10) { #get KL divergence between two 
   mu1 <- as.numeric(pmax(mu1,tinyval))
   mu2 <- as.numeric(pmax(mu2,tinyval))
   stopifnot(length(mu1) == length(mu2))
-  
   kl <- mu1*log(mu1/mu2) + (r+mu1)*log((r+mu2)/(r+mu1))
   kl[kl<0] = 0
   return(sum(kl))

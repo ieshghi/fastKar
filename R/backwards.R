@@ -5,7 +5,7 @@ prep_data_for_py <- function(gg,gm,depth,pix.size=1e5,target_region=NULL,write.t
   #pull data from graph
   nodesdt = gg$nodes$dt[,.(start,end,seqnames,snode.id,cn)]
   nodesgr = gg$nodes$gr
-  edgesdt = copy(gg)$edges$dt[,.(cn,n1,n2,n1.side,n2.side,type)]
+  edgesdt = gg$edges$dt[,.(cn,n1,n2,n1.side,n2.side,type)]
 
   #make sure edges of nodes and target region match
   targetnodes = gr2dt(gr.merge(target_region,nodesgr))
