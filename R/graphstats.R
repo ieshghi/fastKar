@@ -324,7 +324,7 @@ smoothdeldups = function(ggraph){
 	}
 }
 
-sample_and_collapse = function(ggraph,samplesize,min.wid,ifsmooth=F,bands=NULL,region=NULL,mc.cores=1){
+sample_and_collapse = function(ggraph,samplesize,min.wid=3e7,ifsmooth=F,bands=NULL,region=NULL,mc.cores=1){
 	if (is.null(region)){
 		region = si2gr(hg_seqlengths(chr=FALSE)) %Q% (seqnames %in% c(1:22,'X','Y'))
 	}
@@ -343,13 +343,13 @@ sample_and_collapse = function(ggraph,samplesize,min.wid,ifsmooth=F,bands=NULL,r
 		message('Collapsing to bands')
 		if (is.null(bands)){
 			#bands = gr.tile(finalgraph$footprint,min.wid)
-			datafolder = '/gpfs/commons/home/ieshghi/Projects/contacts_sv_correction/data'
+			datafolder = '~/projects/karyotyping/data'
 			bands = readRDS(paste0(datafolder,'/coarsebands.rds'))
 		} else if (inherits(bands,'GRanges')){
 		} else {
 			error('Bands provided must either be GRanges or a scale to tile the genome')
 		}
-		collapsed.walks = collapse_gwalklist(walkset,bands,finalgraph,min.wid=min.wid,mc.cores=mc.cores)
+		collapsed.walks = collapse_gwalklist(walkset,bands.gr = bands,graph = finalgraph,min.wid=min.wid,mc.cores=mc.cores)
 		message('Hashing and counting samples')
 		coll_hashes = sapply(collapsed.walks, `[[`, "hash")
 	}
@@ -360,49 +360,61 @@ sample_and_collapse = function(ggraph,samplesize,min.wid,ifsmooth=F,bands=NULL,r
 	coll_idx = coll_hash.dt[instance==1]$walkset.id
 	unique.collapsed = coll_hash.dt[instance==1,.(walkset.id,collapsed.id)]
 	collapsed.walks = collapsed.walks[coll_idx]
-	return(list(graph=finalgraph,walkset=walkset,collapsed.walks=collapsed.walks,unique.collapsed=unique.collapsed,bands=bands,hash.dt=coll_hash.dt))
+	return(list(graph=finalgraph,walkset=walkset,bands=NULL,collapsed.walks=collapsed.walks,unique.collapsed=unique.collapsed,bands=bands,hash.dt=coll_hash.dt))
 }
 
 
 #' @import pbapply
 collapse_gwalklist <- function(gwlist,bands.gr,graph,min.wid,mc.cores=1,chunksize=1e3){
   gr = graph$nodes$gr[,c('snode.id')]
-  bands.gr$band.width = width(bands.gr)
-  merged.dt = gr2dt(gr.merge(gr,bands.gr)[,c('query.id','subject.id','band.width')])[,.(node.id=query.id,band.id=subject.id,width=width,seqnames,start,end,band.width)]
+  grdt = gr2dt(gr[width(gr)>=min.wid])
+  keepnodes = grdt$snode.id
+#  bands.gr$band.width = width(bands.gr)
+#  merged.dt = gr2dt(gr.merge(gr,bands.gr)[,c('query.id','subject.id','band.width')])[,.(node.id=query.id,band.id=subject.id,width=width,seqnames,start,end,band.width)]
   gw.chunks <- split(gwlist, ceiling(1:length(gwlist) / chunksize))
   collapsed.list = pblapply(gw.chunks, function(chunk) {
     collapsed.chunk = mclapply(chunk, function(gw){
       walknodes = gw$snode.id
       circular = gw$circular
-      sorted = sort_snodes(walknodes,arr=circular)
-      walknodes_sorted = sorted$nodelist
-      circular = sorted$arr
-      collapsed.walk = lapply(walknodes_sorted,function(x){
-        walk = merge.data.table(data.table(order = 1:length(x),node.id = abs(x), strand = sign(x)),merged.dt,by='node.id',allow.cartesian=T)[,step.id:=.I]
-	total_walkwidth = sum(walk$width)
-	if (total_walkwidth > min.wid){ #only keep walks longer than min.wid
-        	walk[strand<0,step.id:=rev(step.id),by=order] #need to add concensus strand functionality
-		walk[,time_inband:=sum(width),by=c('band.id','order')] #need to account for whole-band doubling
-		walk[,bandfrac:=time_inband/band.width]
-		walk[,strandfrac:=sum(width*strand)/time_inband,by=c('band.id','order')]
-        	if (nrow(walk)){
-        	  setkeyv(walk,c('order','step.id'))
-        	  bandsvec = walk$band.id
-		  bandscopy = round(walk$bandfrac)
-		  strandvec = ifelse(walk$strandfrac>=0,1,-1)
-        	  bandsvec = rep(bandsvec,bandscopy)
-        	  strandvec = rep(strandvec,bandscopy)
-        	  return(strandvec*bandsvec)
-        	}else{
-        	  return(NULL)
-        	}
-	} else{return(NULL)}
+#      sorted = sort_snodes(walknodes,arr=circular)
+#      walknodes_sorted = sorted$nodelist
+#      circular = sorted$arr
+#      collapsed.walk = lapply(walknodes_sorted,function(x){
+      collapsed.walk = lapply(walknodes,function(x){
+        walk = merge.data.table(data.table(step=1:length(x),snode.id=x,node.id = abs(x)),grdt[,.(node.id=snode.id,width)],by='node.id',allow.cartesian=T)[,.(step,snode.id,width)]
+	setkeyv(walk,'step')
+	if (nrow(walk)){
+		return(walk$snode.id)
+	}else{
+		return(NULL)
+	}
+#	walk = x[abs(x) %in% keepnodes]
+#	if (total_walkwidth > min.wid){ #only keep walks longer than min.wid
+#        	walk[strand<0,step.id:=rev(step.id),by=order] #need to add concensus strand functionality
+#		setkeyv(walk,c('order','step.id'))
+#		wdt = walk[,.(band.id,width,band.width,strand)][,cluster:=rleid(band.id)]
+#		wdt[,bandfrac:=sum(width)/band.width,by=cluster]
+#		wdt[,strandmean:=sum(strand*width)/band.width,by=cluster]
+#        	if (nrow(walk)){
+#		  bands.dt = unique(wdt[,.(band.id,bandfrac,strandmean)])
+#        	  bandsvec = bands.dt$band.id
+#		  bandscopy = round(bands.dt$bandfrac)
+#		  strandvec = ifelse(bands.dt$strandmean>=0,1,-1)
+#        	  bandsvec = rep(bandsvec,bandscopy)
+#        	  strandvec = rep(strandvec,bandscopy)
+#		  if (length(strandvec*bandsvec)>0){
+#        	  return(strandvec*bandsvec)}
+#		  else{return(NULL)}
+#        	}else{
+#        	  return(NULL)
+#        	}
+#	} else{return(NULL)}
       })
       keep = unlist(lapply(collapsed.walk,function(w){!is.null(w)}))
       collapsed.walk = collapsed.walk[keep]
       circular = circular[keep]
-      sorted = sort_snodes(collapsed.walk,arr=circular)
-      return(list(snode.id = sorted$nodelist,circular = sorted$arr,hash=hash_snodelist(sorted$nodelist,sorted$arr)))
+#      sorted = sort_snodes(collapsed.walk,arr=circular)
+      return(list(snode.id = collapsed.walk,circular = circular,hash=hash_snodelist(collapsed.walk,circular)))
       }, mc.cores=mc.cores)
       return(collapsed.chunk)
       })
@@ -416,14 +428,22 @@ to_gwalk = function(walklist,gr,mc.cores=1){
 		return(this.gr)
       },mc.cores=mc.cores)
 	grl = do.call('GRangesList',grl)
-	return(gW(grl=grl,circular=walklist$circular))
+	return(gW(grl=grl,circular=walklist$circular)$disjoin())
 }
 
-reads_fromwalk = function(walk,readL){
+reads_fromwalk = function(walk,readL,min.res = NULL){
 	gr = walk$graph$gr[,c('node.id')]
 	reads = do.call('rbind',lapply(1:length(walk$snode.id),function(i){
 		snodes = walk$snode.id[[i]]
 		widths = width(gr[abs(snodes)])
+		if (!is.null(min.res)){
+			keep = widths >= min.res
+			snodes = snodes[keep]
+			widths = widths[keep]
+			if (sum(keep)==0){
+				return(NULL)
+			}
+		}
 		grdt = data.table(snode.id=snodes)
 		grdt[,end:=cumsum(widths)]
 		grdt[,start:=end-widths+1]
@@ -456,7 +476,7 @@ reads_fromwalk = function(walk,readL){
 	return(unique(reads))
 }
 
-longread_kl <- function(walk_x, walk_y, graph=NULL,readL=1e4, depth = NULL, background = 1e-5,mc.cores=1) {
+longread_kl <- function(walk_x, walk_y, graph=NULL,readL=1e4, depth = NULL, min.res=NULL, background = 1e-5,mc.cores=1) {
 	if (is.null(walk_x$graph)){
 		if(is.null(graph)){
 			error('Must provide either a gWalk object or a graph as input to function')
@@ -466,8 +486,8 @@ longread_kl <- function(walk_x, walk_y, graph=NULL,readL=1e4, depth = NULL, back
 	}else{
 		graph = walk_x$graph
 	}
-	x_list = reads_fromwalk(walk_x,readL)
-	y_list = reads_fromwalk(walk_y,readL)
+	x_list = reads_fromwalk(walk_x,readL,min.res=min.res)
+	y_list = reads_fromwalk(walk_y,readL,min.res=min.res)
 	all_words = union(x_list$words,y_list$words)
 	c1 = setNames(x_list$nums, x_list$words)[all_words]
 	c2 = setNames(y_list$nums, y_list$words)[all_words]
@@ -475,16 +495,17 @@ longread_kl <- function(walk_x, walk_y, graph=NULL,readL=1e4, depth = NULL, back
 	c2[is.na(c2)] <- 0
 	p = (c1 + background) / (sum(c1) + background * length(all_words))
 	q = (c2 + background) / (sum(c2) + background * length(all_words))
-	m = 0.5 * (p + q)
-  	KL = function(x, y) sum(x * log(x / y))
-  	JS = 0.5 * KL(p, m) + 0.5 * KL(q, m)
+	#m = 0.5 * (p + q)
+	klval = sum(p*log(p/q))
+  	#KL = function(x, y) sum(x * log(x / y))
+  	#JS = 0.5 * KL(p, m) + 0.5 * KL(q, m)
 	if (is.null(depth)){
-		return(JS)
+		return(klval)
 	} else{
 		domain = walk_x$graph$footprint
 		covperread = min(readL/sum(width(domain)),1)
 		N = depth/covperread
-		return(N*JS)
+		return(N*klval)
 	}
 }
 
