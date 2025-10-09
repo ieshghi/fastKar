@@ -16,6 +16,7 @@ gg.to.wiring <- function(gg){
   left.looseedges = copy(nodesdt)[loose.cn.left>0][,.(n2=snode.id,cn = loose.cn.left,n2.side='left',n1=0,n1.side='right')]
   right.looseedges = copy(nodesdt)[loose.cn.right>0][,.(n1=snode.id,cn = loose.cn.right,n2.side='left',n2=0,n1.side='right')]
   external.edges = rbind(edgesdt,rbind(left.looseedges,right.looseedges)[,type:='LOO'][,.(cn,n1,n2,n1.side,n2.side,type)])
+  #browser()
   dedup.edges = external.edges[rep(1:.N,cn)][,.(n1,n2,n1.side,n2.side,type)] #separate all copies of all edges
   split.edgetable = melt.data.table(dedup.edges[,.(n1=paste0(n1,substr(n1.side,1,1)),n2=paste0(n2,substr(n2.side,1,1)),subid=.I,type)],id=c('subid','type'))[,.(subid,n=value,type)] #separate all edges and label them with a unique ID "subid"
   left.split.edgetable = split.edgetable[grepl('l',n)][,n:=as.integer(substr(n,1,nchar(n)-1))][n>0] %>% setkeyv('n') #setkey important so we have all left and right edges ordered appropriately.
@@ -302,7 +303,7 @@ sort_snodes = function(nodelist,arr=NULL) {
 }
 
 #should introduce a threshold width for removing del/dups
-smoothdeldups = function(ggraph){
+smoothdeldups = function(ggraph,res=NULL){
 	#dup_junctions = ggraph$edgesdt[!is.na(ggraph$edgesdt$dup)][n1==n2]
 	dup_junctions = ggraph$edgesdt[n1==n2 & n1.side!=n2.side]
 	del_junctions = ggraph$edgesdt[!is.na(ggraph$edgesdt$del)][abs(n1-n2)==2]
@@ -312,7 +313,8 @@ smoothdeldups = function(ggraph){
 	cnvec[dup_junctions$n1] = cnvec[dup_junctions$n1]-dup_junctions$cn
 	cnvec[del_junctions$this.n] = cnvec[del_junctions$this.n]+del_junctions$cn
 	nodesgr$cn = cnvec
-	nagraph = ggraph$copy
+	nodesgr$fix = T
+	nagraph = gG(nodes = ggraph$nodes$gr,edges = ggraph$edgesdt)
 	nagraph$nodes$mark(cn=NA)
 	nagraph$edges$mark(cn=NA)
 	if (nrow(nagraph$edges$dt)==0){
