@@ -118,7 +118,7 @@ dat[,interchrom:=!((gr.dt[i]$seqnames)==(gr.dt[j]$seqnames))]
 # assuming density is ~constant, we just calculate total interchromosomal area, get total counts and divide by that
 interchr.area = as.numeric(width(parse.gr('1')))*width(parse.gr('2')) #just a check
 total.interchrom.hits = dat[interchrom==TRUE]$value %>% sum
-interchrom_density = total.interchrom.hits/(interchr.area * rao.haploid.depth * 8)
+interchrom_density = total.interchrom.hits/(interchr.area * rao.haploid.depth * 4)
 
 #just checking we're getting the density more or less right
 old_data = readRDS('~/Projects/contacts_sv_correction/data/100kb_lookupfile.rds')
@@ -185,6 +185,7 @@ ppdf(plot(ggplot(result)+geom_point(aes(x=mexp,y=err*(tile.ar)^(1/4),color=log(t
 # test depth
 chr12mb = straw(hic.file,gr=parse.gr('1:1-1e8,2:1-1e8'),res=1e6)
 chr1walk = makewalk(parse.gr('1:1-1e8'),list(1,1))
+rao.depth = rao.haploid.depth
 chr1_simdat = forward_simulate(chr1walk,target_region=streduce(chr1walk$grl),pix.size=1e6,depth=rao.depth)
 noisy_chr1 = make_noisymap(chr1_simdat,theta=3)[[1]]
 chr1data = chr12mb$disjoin(chr1_simdat$gr)$agg(chr1_simdat$gr)
