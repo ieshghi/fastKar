@@ -87,7 +87,7 @@ plotdat = dist.splinedat[dist < maxval,.(x,y,type='data')]
 plotx = linspace(min(plotdat$x),max(plotdat$x))
 plotdat2 = data.table(x=plotx,y=spline_dist(plotx),type='fit')
 plotdat = rbind(plotdat,plotdat2)
-ppdf(plot(ggplot()+geom_point(data=plotdat[type=='data'],aes(x=exp(x),y=exp(y),color=type),size=1) + geom_line(data=plotdat[type=='fit'],aes(x=exp(x),y=exp(y),color=type))+ scale_x_log10() + scale_y_log10() + labs(x='Distance [bp]',y='Count density [bp^-2]')),width=6,height=4,
+ppdf(plot(ggplot()+geom_point(data=plotdat[type=='data'],aes(x=exp(x),y=exp(y),color=type),size=1) + geom_line(data=plotdat[type=='fit'],aes(x=exp(x),y=exp(y),color=type))+ scale_x_log10() + scale_y_log10() + labs(x='Distance [bp]',y='Count density [bp^-2]')),width=5,height=4,
 filename='karyotype_inference/spline_fit')
 
 diag.splinedat = distmeans[dist==0]
@@ -149,13 +149,14 @@ dists.and.widths[,mynum:=.N,by=c('widthprod','dist')]
 #However zeros have been omitted from the dataset so we need to restore them. 
 #bringing all of them back will take too much mem, so we sample the data then restore zeros proportionally
 noiseval = dists.and.widths[,.(value,tile.ar = widthprod,d = dist,numzeros=num-mynum)]
-noiseval[,expected:=predict.hic(d,tile.ar,rao.depth/2)]
+rao.depth = rao.haploid.depth*2
+noiseval[,expected:=predict.hic(d,tile.ar,rao.depth)]
 
 mindist = 1e5
 maxdist = 1e8
 noiseval = noiseval[d > mindist & d < maxdist]
 
-samplesize = 3e6
+samplesize = 3e5
 samplefrac = samplesize/nrow(noiseval)
 noiseval[,zerokeep := as.integer(numzeros*samplefrac)]
 indkeep = sample(1:nrow(noiseval),samplesize)
@@ -163,14 +164,15 @@ subdata_nozeros = noiseval[indkeep,.(value,d,tile.ar,expected,zerokeep)]
 zerorows = unique(subdata_nozeros[,.(value=0,d,tile.ar,expected,zerokeep)])[rep(1:.N,zerokeep)]
 subdata= rbind(subdata_nozeros,zerorows)
 
-ppdf(plot(ggplot(subdata) + geom_point(aes(x=value,y=expected,color=log(tile.ar)),size=0.5) + geom_line(aes(x=value,y=value),linetype='dashed',color='red')+ scale_x_log10() + scale_y_log10()),width=6,height=5,'karyotype_inference/multiscale_obsexp')
+ppdf(plot(ggplot(subdata[value>0]) + geom_point(aes(x=value,y=expected,color=log(d)),size=0.5) + geom_line(aes(x=value,y=value),linetype='dashed',color='red')+ scale_x_log10() + scale_y_log10() + labs(x='Observed',y='Expected',color='Log(Dist.)')),width=5,height=4,'karyotype_inference/multiscale_obsexp')
 
-areas = subdata$tile.ar %>% unique
 theta = theta.ml(subdata$value,subdata$expected)
+#iteration limit when all data used, with subset of data we get theta=2
+theta=2
 subdata[,nbinom_p := dnbinom(value,size=theta,mu=expected)]
 simulated = data.table(value=rnbinom(nrow(subdata),mu=subdata$expected,size=theta),expected=subdata$expected)
 simulated[,nbinom_p:=dnbinom(value,size=theta,mu=expected)]
-ppdf(qq_pval(subdata$nbinom_p,exp=simulated$nbinom_p),width=5,height=4,filename=paste0('karyotype_inference/multiscale_qqplot'))
+ppdf(qq_pval(subdata$nbinom_p,exp=simulated$nbinom_p,max.x=10),width=4,height=4,filename=paste0('karyotype_inference/multiscale_qqplot'))
 
 saveRDS(list(spline_dist,spline_diag,theta),paste0(datafolder,'splines_and_theta.rds'))
 
@@ -185,7 +187,6 @@ ppdf(plot(ggplot(result)+geom_point(aes(x=mexp,y=err*(tile.ar)^(1/4),color=log(t
 # test depth
 chr12mb = straw(hic.file,gr=parse.gr('1:1-1e8,2:1-1e8'),res=1e6)
 chr1walk = makewalk(parse.gr('1:1-1e8'),list(1,1))
-rao.depth = rao.haploid.depth
 chr1_simdat = forward_simulate(chr1walk,target_region=streduce(chr1walk$grl),pix.size=1e6,depth=rao.depth)
 noisy_chr1 = make_noisymap(chr1_simdat,theta=3)[[1]]
 chr1data = chr12mb$disjoin(chr1_simdat$gr)$agg(chr1_simdat$gr)

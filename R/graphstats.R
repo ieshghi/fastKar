@@ -229,11 +229,13 @@ cppFunction('List traverse_graph_cpp(DataFrame A, NumericVector loose_ends) {
 
 #' @import pbmcapply
 #' @import digest
-sample.gwalks = function(gg,N=1,mc.cores=1,chunksize = 1e3,return.gw=T,remove.dups=T){ 
+sample.gwalks = function(gg,N=1,mc.cores=1,chunksize = 1e3,return.gw=T,remove.dups=T,verbose=T,onlyhash=F,keep.circular=T){ 
   wiring = gg.to.wiring(gg)
   internal.edges = wiring$internal.edges
   loose.ends = wiring$loose.ends
+  if(verbose){
   message('Sampling permutations')
+  }
 
   shuffle_edges <- function(edges) {
     new_right <- edges[, if (.N > 1) sample(right, .N) else right, by = n]$V1
@@ -243,14 +245,27 @@ sample.gwalks = function(gg,N=1,mc.cores=1,chunksize = 1e3,return.gw=T,remove.du
   }
   chunks <- N %/% chunksize
   if (chunks > 1){
+	  if(verbose){
   	perms <- do.call('c',pbmclapply(seq_len(chunks), function(i) shuffle_chunk(chunksize, internal.edges),mc.cores = mc.cores))
   }else{
-  	perms <- pbmclapply(seq_len(N), function(i) shuffle_edges(internal.edges),mc.cores = mc.cores)
+  	perms <- do.call('c',mclapply(seq_len(chunks), function(i) shuffle_chunk(chunksize, internal.edges),mc.cores = mc.cores))
+	  }
+  }else{
+	if(verbose){
+  		perms <- pbmclapply(seq_len(N), function(i) shuffle_edges(internal.edges),mc.cores = mc.cores)
+	}else{
+  		perms <- mclapply(seq_len(N), function(i) shuffle_edges(internal.edges),mc.cores = mc.cores)
+	}
   }
-  message('Hashing and keeping unique permutations')
-  hashes = unlist(lapply(perms,digest))
+  
+  if(verbose){
+  	message('Hashing and keeping unique permutations')
+  }
+  hashes = unlist(mclapply(perms,digest,mc.cores=mc.cores))
 
-  message('Generating walks')
+  if(verbose){
+  	message('Generating walks')
+  }
   dt = data.table(hash=hashes,idx=1:N)[,id:=1:.N,by=hash]
   uniqueperms = perms[dt[id==1]$idx]
   permchunks = split(uniqueperms, ceiling(seq_along(uniqueperms)/chunksize))
@@ -259,47 +274,169 @@ sample.gwalks = function(gg,N=1,mc.cores=1,chunksize = 1e3,return.gw=T,remove.du
     if (return.gw){
       ws = lapply(ws,function(w){gW(graph=gg,snode.id=w$snode.id,circular=w$circular)})
     }
-    return(ws)
+    if (onlyhash){
+	return(lapply(ws,function(w){hash_snodelist(w$snode.id,w$circular)}))
+    } else{
+    	return(ws)
+    } 
   }
-  walks.out <- do.call('c',pbmclapply(permchunks, makewalk_chunk,mc.cores = mc.cores))
-  if (remove.dups){
+  if(verbose){
+  	walks.out <- do.call('c',pbmclapply(permchunks, makewalk_chunk,mc.cores = mc.cores))
+  }else{
+  	walks.out <- do.call('c',mclapply(permchunks, makewalk_chunk,mc.cores = mc.cores))
+  }
+  if (onlyhash){
+  		hash.dt = data.table(hash=unlist(walks.out))[,idx:=.I][,id:=1:.N,by=hash]
+		return(hash.dt)
+  }else{if (remove.dups){
   	if (return.gw){
-  	        hashes = do.call('c',lapply(walks.out,function(w){w$hash}))}
+  	        hashes = do.call('c',mclapply(walks.out,function(w){w$hash},mc.cores=mc.cores))}
   	else{
-  	        hashes = do.call('c',lapply(walks.out,function(w){hash_snodelist(w$snode.id,w$circular)}))}
+  	        hashes = do.call('c',mclapply(walks.out,function(w){hash_snodelist(w$snode.id,w$circular)},mc.cores=mc.cores))}
   	hash.dt = data.table(hash=hashes)[,idx:=.I][,id:=1:.N,by=hash]
   	walks.out = walks.out[hash.dt[id==1]$idx]
   } 
+  if (!keep.circular){
+	  keep = unlist(lapply(walks.out,function(w){sum(w$circular)==0}))
+	  walks.out = walks.out[keep]
+  }
   return(walks.out)
+  }
 }
+
+markov.gwalk = function(gg,len,self.avoid = T,attempts = 10,return.gw=F){
+  wiring = gg.to.wiring(gg)
+  internal.edges = wiring$internal.edges
+  loose.ends = wiring$loose.ends
+  hashhist = c()
+  walkhist = list()
+  permute.node = function(edges) {
+	pivot.node = sample(edges[cn>1]$n,1)
+	new_edges = copy(edges)
+	edges.to.permute = edges[n==pivot.node]$right
+	inds = sample(seq_along(edges.to.permute),2)
+	edges.to.permute[c(inds[1],inds[2])] <- edges.to.permute[c(inds[2],inds[1])]
+  	new_edges[n==pivot.node,right:=edges.to.permute]
+	return(new_edges)
+  }
+
+  gw0 = traverse_graph_cpp(internal.edges,loose.ends)
+  gw0$hash = hash_snodelist(gw0$snode.id,gw0$circular)
+  walkhist[[1]] = gw0
+  hashhist = c(hashhist,gw0$hash)
+  for (i in seq_len(len-1)){
+	valid = F
+  	killwalk = T #gets switched to F if we find the next step
+  	for (j in seq_len(attempts)){
+		if (!valid){
+			edge_try = permute.node(internal.edges)	
+			walk_try = traverse_graph_cpp(edge_try,loose.ends)
+			hash_try = hash_snodelist(walk_try$snode.id,walk_try$circular)
+			if (self.avoid){
+				valid = !(hash_try %in% hashhist)
+			} else{valid=T}
+		} else{
+			internal.edges = edge_try
+			walk_try$hash = hash_try
+			walkhist[[i+1]] = walk_try
+			hashhist = c(hashhist,hash_try)	
+			killwalk = F
+			break
+		}
+	} #give a search ending condition, in case we get stuck return a shorter walk
+	if (killwalk){
+		break
+	}
+  }
+  if (return.gw){
+	  gwhist = lapply(walkhist,function(w){gW(graph=gg,snode.id=w$snode.id,circular=w$circular)})
+	  return(gwhist)
+  }else{return(walkhist)}
+}
+
+multi.markov = function(gg,N,len,self.avoid=T,attempts=10,mc.cores=1,return.gw=F){
+	chains = mclapply(1:N,function(i){
+		markov.gwalk(gg=gg,len=len,self.avoid=self.avoid,attempts=attempts,return.gw=return.gw)  
+  },mc.cores=mc.cores)
+	return(chains)
+}
+
+booth_rotate = function(x) {
+	booth = function(s) {
+		n = length(s)
+		if (n == 0) return(1L)
+		s2 = c(s, s)
+		i = 1L
+		j = 2L
+		k = 0L
+		while (i <= n && j <= n && k < n) {
+			a = s2[i + k]
+			b = s2[j + k]
+			if (a == b) {
+				k = k + 1L
+			} else if (a > b) {
+				# rotation at i is worse than rotation at j -> skip i's prefix
+				i = i + k + 1L
+				if (i <= j) i = j + 1L
+				k = 0L
+			} else {
+				# rotation at j is worse -> skip j's prefix
+				j = j + k + 1L
+				if (j <= i) j = i + 1L
+				k = 0L
+			}
+		}
+		pos = min(i, j)
+		# ensure returned index is in 1..n (not > n)
+		if (pos > n) pos = pos - n
+		return(pos)
+	}
+	start = booth(x)
+	n = length(x)
+	if (start==1){
+		return(x)
+	}else{
+		return(x[c(start:n, 1:(start-1))])
+	}
+}
+
 
 
 hash_snodelist = function(snode.id,circular){
-  circ = ifelse(rep(circular,2),'C','L')
-  nodepcomp = c(snode.id,lapply(snode.id,function(s){-rev(s)}))
-  nodestring = lapply(1:length(nodepcomp),function(i){
-    	return(paste0(toString(nodepcomp[[i]]),circ[i]))
-  })
-  return(toString(sort(do.call('c',nodestring))))
+	sorted = sort_snodes(snode.id,circular)
+	snode.id = sorted$nodelist
+	circular = sorted$arr
+	circ = ifelse(rep(circular,2),'C','L')
+	nodepcomp = c(snode.id,lapply(snode.id,function(s){-rev(s)}))
+	nodestring = lapply(1:length(nodepcomp),function(i){
+		return(paste0(toString(nodepcomp[[i]]),circ[i]))
+	})
+	return(toString(sort(do.call('c',nodestring))))
 }
 
-sort_snodes = function(nodelist,arr=NULL) {
-  choose_compl = lapply(nodelist, function(x) {
-    rc = -rev(x)
-    if (paste(x, collapse = ",") <= paste(rc, collapse = ",")) {
-      x
-    } else {
-      rc
-    }
-  })
-  ord <- order(sapply(choose_compl, paste, collapse = ","))
-  sorted_nodes = choose_compl[ord]
-  if (!is.null(arr)){
-    sorted_arr = arr[ord]
-    return(list(nodelist=sorted_nodes,arr=sorted_arr))
-  }else{
-    return(sorted_nodes)
-  }
+sort_snodes = function(nodelist,circ=NULL) {
+	if (sum(circ)>0){
+		circ_walks = nodelist[circ]
+		circ_walks_rot = lapply(circ_walks,function(w){
+			return(booth_rotate(w))	
+	})
+		nodelist[circ] = circ_walks_rot
+	}
+	choose_compl = lapply(nodelist, function(x) {
+		rc = -rev(x)
+		if (paste(x, collapse = ",") <= paste(rc, collapse = ",")) {
+			x
+		} else {
+			rc
+		}})
+	ord <- order(sapply(choose_compl, paste, collapse = ","))
+	sorted_nodes = choose_compl[ord]
+	if (!is.null(circ)){
+		sorted_circ = circ[ord]
+		return(list(nodelist=sorted_nodes,circ=sorted_circ))
+	}else{
+		return(sorted_nodes)
+	}
 }
 
 #should introduce a threshold width for removing del/dups
@@ -326,35 +463,29 @@ smoothdeldups = function(ggraph,res=NULL){
 	}
 }
 
-sample_and_collapse = function(ggraph,samplesize,min.wid=3e7,ifsmooth=F,bands=NULL,region=NULL,mc.cores=1){
-	if (is.null(region)){
-		region = si2gr(hg_seqlengths(chr=FALSE)) %Q% (seqnames %in% c(1:22,'X','Y'))
-	}
-	if (ifsmooth){
-		message('Smoothing dels and dups')
-		finalgraph = smoothdeldups(ggraph %&% region)
-	}else{ finalgraph = ggraph$copy
-	}
+sample_and_collapse = function(ggraph,samplesize,min.wid=3e7,bands=NULL,mc.cores=1){
 	message('Sampling walks')
-	if (is.null(finalgraph)){
-		return(list(card.estimate=1,coverage=1,collapsed.walks=NULL,bands=bands))
-	}else if (nrow(finalgraph$edges$dt) == 0 ){
-		return(list(card.estimate=1,coverage=1,collapsed.walks=NULL,bands=bands))
-	}else{
-		walkset = sample.gwalks(finalgraph,samplesize,return.gw=F,mc.cores=mc.cores)
-		message('Collapsing to bands')
-		if (is.null(bands)){
-			#bands = gr.tile(finalgraph$footprint,min.wid)
-			datafolder = '~/projects/karyotyping/data'
-			bands = readRDS(paste0(datafolder,'/coarsebands.rds'))
-		} else if (inherits(bands,'GRanges')){
-		} else {
-			error('Bands provided must either be GRanges or a scale to tile the genome')
-		}
-		collapsed.walks = collapse_gwalklist(walkset,bands.gr = bands,graph = finalgraph,min.wid=min.wid,mc.cores=mc.cores)
-		message('Hashing and counting samples')
-		coll_hashes = sapply(collapsed.walks, `[[`, "hash")
+	walkset = sample.gwalks(ggraph,samplesize,return.gw=F,mc.cores=mc.cores)
+  	gr = ggraph$nodes$gr[,c('node.id')]
+	message('Collapsing to bands')
+	if (is.null(bands)){
+		merged.dt = gr2dt(gr)[,.(node.id,band.id=node.id,width,seqnames,start,end)]
+	} else if (inherits(bands,'GRanges')){
+ 		merged.dt = gr2dt(gr.merge(gr,bands)[,c('query.id','subject.id')])[,.(node.id=query.id,band.id=subject.id,width=width,seqnames,start,end)]
+	} else if (inherits(bands,'character')){
+		bands.td = gTrack::karyogram(file = bands)
+		bands = bands.td@data
+		bands.gr = gr.nochr(grl.unlist(do.call(`GRangesList`, bands)))
+		bands.gr = bands.gr %Q% (seqnames %in% c(1:22,'X','Y'))
+		bands.gr = dt2gr(gr2dt(bands.gr)[,start:=start+1],seqlengths=seqlengths(bands.gr))
+ 		merged.dt = gr2dt(gr.merge(gr,bands.gr)[,c('query.id','subject.id')])[,.(node.id=query.id,band.id=subject.id,width=width,seqnames,start,end)]
+	} else {
+		error('Bands provided must either be GRanges or a path to cytobands file')
 	}
+	collapsed.walks = collapse_gwalklist(walkset,merged.dt,min.wid,mc.cores)
+
+	message('Hashing and counting samples')
+	coll_hashes = sapply(collapsed.walks, `[[`, "hash")
 	coll_hash.dt = data.table(collapsed.hash=unlist(coll_hashes))[,walkset.id:=.I][,collapsed.id:=as.integer(factor(coll_hashes))]
 	coll_hash.dt[,count:=.N,by=collapsed.id]
 	setkeyv(coll_hash.dt,'collapsed.id')
@@ -362,75 +493,48 @@ sample_and_collapse = function(ggraph,samplesize,min.wid=3e7,ifsmooth=F,bands=NU
 	coll_idx = coll_hash.dt[instance==1]$walkset.id
 	unique.collapsed = coll_hash.dt[instance==1,.(walkset.id,collapsed.id)]
 	collapsed.walks = collapsed.walks[coll_idx]
-	return(list(graph=finalgraph,walkset=walkset,bands=NULL,collapsed.walks=collapsed.walks,unique.collapsed=unique.collapsed,bands=bands,hash.dt=coll_hash.dt))
+
+	return(list(graph=ggraph,walkset=walkset,collapsed.walks=collapsed.walks,bands=dt2gr(merged.dt),hash.dt=coll_hash.dt))
 }
 
-
 #' @import pbapply
-collapse_gwalklist <- function(gwlist,bands.gr,graph,min.wid,mc.cores=1,chunksize=1e3){
-  gr = graph$nodes$gr[,c('snode.id')]
-  grdt = gr2dt(gr[width(gr)>=min.wid])
-  keepnodes = grdt$snode.id
-#  bands.gr$band.width = width(bands.gr)
-#  merged.dt = gr2dt(gr.merge(gr,bands.gr)[,c('query.id','subject.id','band.width')])[,.(node.id=query.id,band.id=subject.id,width=width,seqnames,start,end,band.width)]
-  gw.chunks <- split(gwlist, ceiling(1:length(gwlist) / chunksize))
-  collapsed.list = pblapply(gw.chunks, function(chunk) {
-    collapsed.chunk = mclapply(chunk, function(gw){
+collapse_gwalklist <- function(gwlist,merged.dt,min.wid,mc.cores=1){
+  merged.dt[,row_id:=.I]
+  collapsed.list = pbmclapply(gwlist, function(gw) {
       walknodes = gw$snode.id
       circular = gw$circular
-#      sorted = sort_snodes(walknodes,arr=circular)
-#      walknodes_sorted = sorted$nodelist
-#      circular = sorted$arr
-#      collapsed.walk = lapply(walknodes_sorted,function(x){
       collapsed.walk = lapply(walknodes,function(x){
-        walk = merge.data.table(data.table(step=1:length(x),snode.id=x,node.id = abs(x)),grdt[,.(node.id=snode.id,width)],by='node.id',allow.cartesian=T)[,.(step,snode.id,width)]
+        walk = merge.data.table(data.table(step=1:length(x),snode.id=x,node.id = abs(x),strand=sign(x)),merged.dt[,.(node.id,row_id,width,seqnames)],by='node.id',allow.cartesian=T)[,.(step,strand,snode.id,width,row_id,seqnames)]
+	walk[strand==-1,row_id:=-rev(row_id),by=step]
 	setkeyv(walk,'step')
-	if (nrow(walk)){
-		return(walk$snode.id)
-	}else{
-		return(NULL)
-	}
-#	walk = x[abs(x) %in% keepnodes]
-#	if (total_walkwidth > min.wid){ #only keep walks longer than min.wid
-#        	walk[strand<0,step.id:=rev(step.id),by=order] #need to add concensus strand functionality
-#		setkeyv(walk,c('order','step.id'))
-#		wdt = walk[,.(band.id,width,band.width,strand)][,cluster:=rleid(band.id)]
-#		wdt[,bandfrac:=sum(width)/band.width,by=cluster]
-#		wdt[,strandmean:=sum(strand*width)/band.width,by=cluster]
-#        	if (nrow(walk)){
-#		  bands.dt = unique(wdt[,.(band.id,bandfrac,strandmean)])
-#        	  bandsvec = bands.dt$band.id
-#		  bandscopy = round(bands.dt$bandfrac)
-#		  strandvec = ifelse(bands.dt$strandmean>=0,1,-1)
-#        	  bandsvec = rep(bandsvec,bandscopy)
-#        	  strandvec = rep(strandvec,bandscopy)
-#		  if (length(strandvec*bandsvec)>0){
-#        	  return(strandvec*bandsvec)}
-#		  else{return(NULL)}
-#        	}else{
-#        	  return(NULL)
-#        	}
-#	} else{return(NULL)}
+	walk[,breakpt:=((row_id-shift(row_id)!=1)|(seqnames!=shift(seqnames)))][,breakpt:=ifelse(is.na(breakpt),T,breakpt)]
+	walk[,run_id:=cumsum(breakpt)]
+	walk[,small:=sum(width)<min.wid,by=run_id]
+	walk[,runofruns:=cumsum(abs(rev(circdiff(rev(small),-1))))] #lol
+	walk[,keep:=(!small | sum(width)>min.wid),by=runofruns]
+	walk_kept = walk[keep==T][,.(row_id,seqnames,width,ufo=small)]
+	walk_kept[,breakpt:=((row_id-shift(row_id)!=1)|(seqnames!=shift(seqnames)))][,breakpt:=ifelse(is.na(breakpt),T,breakpt)]
+	walk_kept[,run_id:=cumsum(breakpt)]
+	walk_kept[,row_out:=ifelse(ufo,NA,row_id)]
+	outdat = walk_kept$row_out
+	outdat = outdat[c(TRUE, !(is.na(outdat[-1]) & is.na(outdat[-length(outdat)])))]
+	return(outdat)
       })
-      keep = unlist(lapply(collapsed.walk,function(w){!is.null(w)}))
-      collapsed.walk = collapsed.walk[keep]
-      circular = circular[keep]
-#      sorted = sort_snodes(collapsed.walk,arr=circular)
       return(list(snode.id = collapsed.walk,circular = circular,hash=hash_snodelist(collapsed.walk,circular)))
       }, mc.cores=mc.cores)
-      return(collapsed.chunk)
-      })
-      return(do.call('c',collapsed.list))
+  return(collapsed.list)
 }
 
 to_gwalk = function(walklist,gr,mc.cores=1){
 	grl = mclapply(walklist$snode.id,function(nl){
+		nl = nl[!is.na(nl)]
 		this.gr = gr[abs(nl)]
 		strand(this.gr) = ifelse(nl>0,'+','-')
-		return(this.gr)
-      },mc.cores=mc.cores)
-	grl = do.call('GRangesList',grl)
-	return(gW(grl=grl,circular=walklist$circular)$disjoin())
+		if(length(this.gr)>0){return(this.gr)}else{return(NULL)}
+        },mc.cores=mc.cores)
+	keep = do.call('c',lapply(grl,function(x){!is.null(x)}))
+	grl = do.call('GRangesList',grl[keep])
+	return(gW(grl=grl,circular=walklist$circular[keep])$disjoin())
 }
 
 reads_fromwalk = function(walk,readL,min.res = NULL){
@@ -455,6 +559,7 @@ reads_fromwalk = function(walk,readL,min.res = NULL){
 		if (walk$circular[i]){ #check if this is a circular walk
 			add.gr = data.table::copy(grdt)
 			add.gr = add.gr[start < readL][,start:=start+maxlen][,end:=min(end+maxlen+1,maxlen+readL)] #add at the end however much is equal to the hanging piece
+			add.gr = add.gr[end>start]
 			grdt = rbind(grdt,add.gr) #add at the end however much is equal to the hanging piece
 			maxlen = max(grdt$end)
 		}
@@ -511,7 +616,7 @@ longread_kl <- function(walk_x, walk_y, graph=NULL,readL=1e4, depth = NULL, min.
 	}
 }
 
-hic_kl <- function(walk_x, walk_y, graph=NULL,pix.size=1e6, depth = 1,theta=2) {
+hic_kl = function(walk_x, walk_y, graph=NULL,pix.size=1e6, depth = 1,theta=2) {
 	if (is.null(walk_x$graph)){
 		if(is.null(graph)){
 			error('Must provide either a gWalk object or a graph as input to function')
@@ -523,6 +628,132 @@ hic_kl <- function(walk_x, walk_y, graph=NULL,pix.size=1e6, depth = 1,theta=2) {
 	}
 	hic_x = forward_simulate(walk_x,target_region = graph$footprint,pix.size=pix.size,depth=depth)
 	hic_y = forward_simulate(walk_y,target_region = graph$footprint,pix.size=pix.size,depth=depth)
-	kl = kl_nb(hic_x$value,hic_y$value,r=theta)
+	kl = compmaps(hic_x,hic_y,theta=theta,return_kl=T,area0=pix.size^2,ifsum=T)
+	#kl = kl_nb(hic_x$value,hic_y$value,r=theta)
 	return(kl)
 }
+
+alignscore = function(x,y,gap_penalty=-1){
+	if (is.null(x)){
+		return(sum(gap_penalty[as.character(abs(y))]))
+	} else if (is.null(y)){
+		return(sum(gap_penalty[as.character(abs(x))]))
+	}
+	xc = as.character(abs(x))
+	yc = as.character(abs(y))
+	if (length(gap_penalty)==1){
+		nodes = unique(c(xc,yc))
+		gap_penalty = rep(gap_penalty,length(nodes))
+		names(gap_penalty) = nodes
+	}
+	gx = gap_penalty[xc]
+	gy = gap_penalty[yc]
+	n = length(x)
+	m = length(y)
+	S = matrix(0, n + 1, m + 1)
+	S[,1] = cumsum(c(0,gx))
+	S[1,] = cumsum(c(0,gy))
+	for (i in 2:(n+1)){
+		for (j in 2:(m+1)){
+			match = S[i-1,j-1] + ifelse(x[i-1]==y[j-1],0,gx[i-1]+gy[j-1])
+			del = S[i-1,j] + gx[i-1]
+			ins = S[i,j-1] + gy[j-1]
+			S[i,j] = max(match,del,ins)
+		}
+	}
+
+	return(S[n + 1, m + 1])
+}
+
+alignscore_compl = function(x,y,gp){
+	s1 = alignscore(x,y,gp)
+	if (!is.null(y)){
+		s2 = alignscore(x,-rev(y),gp)
+		return(max(s1,s2))}
+	else{return(s1)}
+}
+
+edit_dist = function(gwx,gwy,graph=NULL,thresh=0,return_all = F){
+	if (is.null(graph)){
+		graph = gwx$graph
+		if (is.null(graph)){
+			error('Must provide a graph object or have a graph as an element of gwx')
+		}
+	}
+
+	nodedt = graph$nodes$dt[,.(width,node.id)]
+	widthvec = setNames(graph$nodes$dt$width,graph$nodes$dt$node.id)
+	gap_penalties = -widthvec
+
+	sn_x = sort_snodes(gwx$snode.id,gwx$circular)
+	sn_y = sort_snodes(gwy$snode.id,gwy$circular)
+	x_totlen = vapply(sn_x,function(ids) sum(widthvec[as.character(abs(ids))]),numeric(1))
+	y_totlen = vapply(sn_y,function(ids) sum(widthvec[as.character(abs(ids))]),numeric(1))
+
+	sn_x = sn_x[x_totlen > thresh]
+	sn_y = sn_y[y_totlen > thresh]
+
+	n = length(sn_x)
+	m = length(sn_y)
+	if (n<m){
+		sn_x = c(sn_x,rep(list(NULL),m-n))
+	}else if (m<n){
+		sn_y = c(sn_y,rep(list(NULL),n-m))
+	}
+	n = max(n,m)
+
+	comppairs = data.table(expand.grid(1:n,1:n))[,.(i=Var1,j=Var2)]
+	costs = -unlist(lapply(1:nrow(comppairs),function(x){alignscore_compl(sn_x[[comppairs[x]$i]],sn_y[[comppairs[x]$j]],gap_penalties)}))
+	comppairs[,cost:=costs]
+	costmat = data.matrix(tidyr::pivot_wider(comppairs,names_from=j,values_from=cost)[,-1])
+	assignment = clue::solve_LSAP(costmat,maximum=F)
+
+	optscores = costmat[cbind(seq_along(assignment),assignment)]
+	if (return_all){return(list(assignment,optscores))}else{return(sum(optscores[optscores > thresh]))}
+}
+
+#just a wrapper function to calculate all distance pairs
+#if you want to skip calculating Hi-C (or long-read) distances, set pix.size=0 (or readL=0). To avoid edit distances, set edit_thresh=NA
+get_dists = function(gw,graph,pix.size=5e6,readL=1e6,edit_thresh=0,mc.cores=1){
+	comppairs = data.table(expand.grid(1:length(gw),1:length(gw)))[,.(i=Var1,j=Var2)][i>j]
+	if (pix.size>0){
+	message('Calculating Hi-C distances')
+	hic_dists = unlist(pbmclapply(1:nrow(comppairs),function(x){
+		hic_kl(gw[[comppairs[x]$i]],gw[[comppairs[x]$j]],graph=graph,pix.size=pix.size,depth=1,theta=2)},mc.cores=mc.cores))
+	comppairs[,hic:=hic_dists]
+	}
+	if (!is.na(edit_thresh)){
+	message('Calculating edit distances')
+	edit_dists = unlist(pbmclapply(1:nrow(comppairs),function(x){
+		edit_dist(gw[[comppairs[x]$i]],gw[[comppairs[x]$j]],graph=graph,thresh=edit_thresh)
+				   },mc.cores=mc.cores))
+	comppairs[,edit:=edit_dists]
+	}
+	if (readL>0){
+	message('Calculating long-read distances')
+	lr_dists = unlist(pbmclapply(1:nrow(comppairs),function(x){
+		longread_kl(gw[[comppairs[x]$i]],gw[[comppairs[x]$j]],graph=graph,readL=readL,depth=1)
+			   },mc.cores=mc.cores))
+	comppairs[,longread:=lr_dists]
+	}
+	return(comppairs)
+}
+	
+# does something similar to walks() but only returns linear walks on a given graph by sampling and keeping only unique walks. Doesn't return linear walks that exist on no possible decomposition, unlike walks()
+get_all_lin_walks <-
+function(fpgg,N=1000,mc.cores=1){
+        walksets = sample.gwalks(fpgg,N,mc.cores=mc.cores,verbose=F)
+            has_circ = unlist(lapply(walksets,function(w){sum(w$circular)>0}))
+                walksets_lin = walksets[!has_circ]
+                    all_linwalks = do.call('c',walksets_lin)
+                        all_hashes = data.table(hash=unlist(lapply(1:length(all_linwalks),function(i){all_linwalks[i]$hash})))[,idx:=.I][,instance:=1:.N,by=hash]
+                            keep = all_hashes[instance==1]$idx
+                                return(all_linwalks[keep])
+                            }
+
+get_all_pair_distances = function(gw,depth,pix.size,mc.cores=1){
+	comppairs = data.table(expand.grid(1:length(gw),1:length(gw)))[,.(i=Var1,j=Var2)][i>j]
+	hic_dists = unlist(pbmclapply(1:nrow(comppairs),function(x){
+			hic_kl(gw[[comppairs[x]$i]],gw[[comppairs[x]$j]],pix.size=pix.size,depth=depth,theta=2)
+				   },mc.cores=mc.cores))
+	return(hic_dists)}
