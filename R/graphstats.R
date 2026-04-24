@@ -361,7 +361,7 @@ multi.markov = function(gg,N,len,self.avoid=T,attempts=10,mc.cores=1,return.gw=F
 	return(chains)
 }
 
-booth_rotate = function(x) {
+booth_rotate = function(x) { #an implementation of Booth's algorithm to disambiguate circular walk hashes. See https://en.wikipedia.org/wiki/Lexicographically_minimal_string_rotation
 	booth = function(s) {
 		n = length(s)
 		if (n == 0) return(1L)
@@ -405,7 +405,7 @@ booth_rotate = function(x) {
 hash_snodelist = function(snode.id,circular){
 	sorted = sort_snodes(snode.id,circular)
 	snode.id = sorted$nodelist
-	circular = sorted$arr
+	circular = sorted$circ
 	circ = ifelse(rep(circular,2),'C','L')
 	nodepcomp = c(snode.id,lapply(snode.id,function(s){-rev(s)}))
 	nodestring = lapply(1:length(nodepcomp),function(i){
