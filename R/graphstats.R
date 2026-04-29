@@ -685,8 +685,8 @@ edit_dist = function(gwx,gwy,graph=NULL,thresh=0,return_all = F){
 	widthvec = setNames(graph$nodes$dt$width,graph$nodes$dt$node.id)
 	gap_penalties = -widthvec
 
-	sn_x = sort_snodes(gwx$snode.id,gwx$circular)
-	sn_y = sort_snodes(gwy$snode.id,gwy$circular)
+	sn_x = sort_snodes(gwx$snode.id,gwx$circular)$nodelist
+	sn_y = sort_snodes(gwy$snode.id,gwy$circular)$nodelist
 	x_totlen = vapply(sn_x,function(ids) sum(widthvec[as.character(abs(ids))]),numeric(1))
 	y_totlen = vapply(sn_y,function(ids) sum(widthvec[as.character(abs(ids))]),numeric(1))
 
