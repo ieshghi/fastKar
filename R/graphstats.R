@@ -1,3 +1,7 @@
+#' @useDynLib fastKar, .registration = TRUE
+#' @importFrom Rcpp sourceCpp
+NULL
+
 #TODO for all inference methods: make some hashing method so that user can look at all the sampled walk sets and their respective NLLs
 
 #goes from a ggraph to a "wiring", which gives all the internal edges of the graph (going from left side of a node to right side)
@@ -29,201 +33,6 @@ gg.to.wiring <- function(gg){
   internal.edges[,id:=.I]
   return(list(internal.edges = internal.edges,loose.ends = loose.subids,gg=gg))
 }
-
-# given a wiring, with internal edges and loose ends, traverse graph and return paths and cycles
-cppFunction('List traverse_graph_cpp(DataFrame A, NumericVector loose_ends) {
-  // Extract columns from the data frame
-  IntegerVector n = A["n"];
-  IntegerVector left = A["left"];
-  IntegerVector right = A["right"];
-  IntegerVector id = A["id"];
-  
-  int nrow = n.size();
-  
-  // Data structures for tracking
-  std::set<int> visited_edges;
-  std::set<int> visited_rows;
-  List traversed_paths;
-  
-  // Make a copy of loose_ends to modify
-  std::set<int> remaining_loose_ends;
-  for (int i = 0; i < loose_ends.size(); i++) {
-    remaining_loose_ends.insert(loose_ends[i]);
-  }
-  
-  // Remove loose ends that have already been visited
-  for (auto it = remaining_loose_ends.begin(); it != remaining_loose_ends.end();) {
-    if (visited_edges.find(*it) != visited_edges.end()) {
-      it = remaining_loose_ends.erase(it);
-    } else {
-      ++it;
-    }
-  }
-  
-  // First part: traverse paths starting from loose ends
-  while (!remaining_loose_ends.empty()) {
-    int start_edge = *remaining_loose_ends.begin();  // Pick an unvisited loose end
-    std::vector<int> path;
-    std::vector<int> nodepath;
-    int current_edge = start_edge;
-
-    
-    while (true) {
-      path.push_back(current_edge);
-      visited_edges.insert(current_edge);
-      
-      // Find the row where current_edge appears in "left" or "right"
-      int row_idx = -1;
-      for (int i = 0; i < nrow; i++) {
-        if ((left[i] == current_edge || right[i] == current_edge) && 
-            visited_rows.find(id[i]) == visited_rows.end()) {
-          row_idx = i;
-          break;
-        }
-      }
-      
-      if (row_idx == -1) break;  // No valid row found
-      
-      visited_rows.insert(id[row_idx]);
-      
-      // Determine the next edge
-      int next_edge;
-      if (left[row_idx] == current_edge) {
-        nodepath.push_back(n[row_idx]);
-        next_edge = right[row_idx];
-      } else {
-        nodepath.push_back(-n[row_idx]);
-        next_edge = left[row_idx];
-      }
-      
-      // Check if next_edge is a loose end and weve already traversed something
-      if (!path.empty() && 
-          remaining_loose_ends.find(next_edge) != remaining_loose_ends.end()) {
-        break;
-      }
-      
-      // Find the next row containing next_edge
-      int next_row_idx = -1;
-      for (int i = 0; i < nrow; i++) {
-        if ((left[i] == next_edge || right[i] == next_edge) && 
-            visited_rows.find(id[i]) == visited_rows.end()) {
-          next_row_idx = i;
-          break;
-        }
-      }
-      
-      if (next_row_idx == -1) {
-        // No more paths, add the final edge
-        visited_edges.insert(next_edge);
-        path.push_back(next_edge);
-        break;
-      }
-      
-      current_edge = next_edge;  // Move to the next edge
-    }
-    
-    // Add the completed path
-    if(nodepath.size()>0){
-        traversed_paths.push_back(nodepath);
-    }
-    
-    // Update unvisited loose ends
-    remaining_loose_ends.clear();
-    for (int i = 0; i < loose_ends.size(); i++) {
-      if (visited_edges.find(loose_ends[i]) == visited_edges.end()) {
-        remaining_loose_ends.insert(loose_ends[i]);
-      }
-    }
-  }
-  
-  // Second part: detect cycles
-  List cycles;
-  
-  // Find remaining unvisited rows
-  std::vector<int> remaining_row_indices;
-  for (int i = 0; i < nrow; i++) {
-    if (visited_rows.find(id[i]) == visited_rows.end()) {
-      remaining_row_indices.push_back(i);
-    }
-  }
-  
-  while (!remaining_row_indices.empty()) {
-    int start_idx = remaining_row_indices[0];
-    int start_edge = right[start_idx];  // Start from right edge
-    
-    visited_rows.insert(id[start_idx]);
-    
-    std::vector<int> path;
-    std::vector<int> nodepath;
-    nodepath.push_back(n[start_idx]);  // Start with the node value
-    
-    int current_edge = start_edge;
-    
-    while (true) {
-      path.push_back(current_edge);
-      
-      // Find the row containing this edge
-      int row_idx = -1;
-      for (int i : remaining_row_indices) {
-        if ((left[i] == current_edge || right[i] == current_edge) && 
-            visited_rows.find(id[i]) == visited_rows.end()) {
-          row_idx = i;
-          break;
-        }
-      }
-      
-      if (row_idx == -1) {
-        // No more valid rows, cycle is complete
-        cycles.push_back(nodepath);
-        break;
-      }
-      
-      visited_rows.insert(id[row_idx]);
-      
-      // Determine the next edge
-      int next_edge;
-      if (left[row_idx] == current_edge) {
-        nodepath.push_back(n[row_idx]);
-        next_edge = right[row_idx];
-      } else {
-        nodepath.push_back(-n[row_idx]);
-        next_edge = left[row_idx];
-      }
-      
-      current_edge = next_edge;  // Move to next edge
-    }
-    
-    // Update remaining row indices
-    remaining_row_indices.clear();
-    for (int i = 0; i < nrow; i++) {
-      if (visited_rows.find(id[i]) == visited_rows.end()) {
-        remaining_row_indices.push_back(i);
-      }
-    }
-  }
-
-  int n_paths = traversed_paths.size();
-  int n_cycles = cycles.size();
-  int n_total = n_paths + n_cycles;
-  List combined(n_total);
-  LogicalVector circular(n_total);
-
-  for (int i = 0; i < n_paths; i++) {
-      combined[i] = traversed_paths[i];
-      circular[i] = false;
-  }
-
-  for (int i = 0; i < n_cycles; i++) {
-      combined[n_paths + i] = cycles[i];
-      circular[n_paths + i] = true;
-  }
-  
-  return List::create(
-      _["snode.id"] = combined,
-      _["circular"] = circular
-  );
-}
-')
 
 #sample gWalks from graph gg, take N samples and return all unique permutations among them
 
@@ -399,8 +208,6 @@ booth_rotate = function(x) { #an implementation of Booth's algorithm to disambig
 		return(x[c(start:n, 1:(start-1))])
 	}
 }
-
-
 
 hash_snodelist = function(snode.id,circular){
 	sorted = sort_snodes(snode.id,circular)
@@ -671,6 +478,45 @@ alignscore_compl = function(x,y,gp){
 		s2 = alignscore(x,-rev(y),gp)
 		return(max(s1,s2))}
 	else{return(s1)}
+}
+
+edit_dist_cpp = function(gwx,gwy,graph=NULL,thresh=0,return_all = F){
+	if (is.null(graph)){
+		graph = gwx$graph
+		if (is.null(graph)){
+			error('Must provide a graph object or have a graph as an element of gwx')
+		}
+	}
+
+	nodedt = graph$nodes$dt[,.(width,node.id)]
+	widthvec = setNames(graph$nodes$dt$width,graph$nodes$dt$node.id)
+
+	ids = as.integer(names(widthvec))
+	max_id = max(abs(ids))
+	penalty = numeric(max_id)
+	penalty[abs(ids)] = -widthvec
+
+	sn_x = sort_snodes(gwx$snode.id,gwx$circular)$nodelist
+	sn_y = sort_snodes(gwy$snode.id,gwy$circular)$nodelist
+	x_totlen = vapply(sn_x,function(ids) sum(widthvec[as.character(abs(ids))]),numeric(1))
+	y_totlen = vapply(sn_y,function(ids) sum(widthvec[as.character(abs(ids))]),numeric(1))
+
+	sn_x = sn_x[x_totlen > thresh]
+	sn_y = sn_y[y_totlen > thresh]
+
+	n = length(sn_x)
+	m = length(sn_y)
+	if (n<m){
+		sn_x = c(sn_x,rep(list(integer(0)),m-n))
+	}else if (m<n){
+		sn_y = c(sn_y,rep(list(integer(0)),n-m))
+	}
+	n = max(n,m)
+
+	costmat = compute_cost_matrix_cpp(sn_x, sn_y, penalty)
+	assignment = clue::solve_LSAP(pmax(costmat,0),maximum=F)
+	optscores = costmat[cbind(seq_along(assignment),assignment)]
+	if (return_all){return(list(assignment,optscores))}else{return(sum(optscores[optscores > thresh]))}
 }
 
 edit_dist = function(gwx,gwy,graph=NULL,thresh=0,return_all = F){
