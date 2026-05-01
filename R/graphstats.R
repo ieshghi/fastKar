@@ -304,7 +304,7 @@ sample.gwalks = function(gg,N=1,mc.cores=1,chunksize = 1e3,return.gw=T,remove.du
   }
 }
 
-markov.gwalk = function(gg,len,self.avoid = T,attempts = 10,return.gw=F){
+markov.gwalk = function(gg,len,self.avoid = F,attempts = 10,return.gw=F){
   wiring = gg.to.wiring(gg)
   internal.edges = wiring$internal.edges
   loose.ends = wiring$loose.ends
