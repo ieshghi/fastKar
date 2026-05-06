@@ -113,6 +113,52 @@ sample.gwalks = function(gg,N=1,mc.cores=1,chunksize = 1e3,return.gw=T,remove.du
   }
 }
 
+local.sampling = function(gg,nsteps,nwalk,onlyhash=F,starter_edges=NULL,return.edges=F){
+  wiring = gg.to.wiring(gg)
+  if (is.null(starter_edges)){
+  	internal.edges = wiring$internal.edges
+  } else {
+	internal.edges = starter_edges
+  }
+  loose.ends = wiring$loose.ends
+  hashhist = c()
+  permute.node = function(edges) {
+	pivot.node = sample(edges[cn>1]$n,1)
+	new_edges = copy(edges)
+	edges.to.permute = edges[n==pivot.node]$right
+	inds = sample(seq_along(edges.to.permute),2)
+	edges.to.permute[c(inds[1],inds[2])] <- edges.to.permute[c(inds[2],inds[1])]
+  	new_edges[n==pivot.node,right:=edges.to.permute]
+	return(new_edges)
+  }
+
+  gw0 = traverse_graph_cpp(internal.edges,loose.ends)
+  gw0$hash = hash_snodelist(gw0$snode.id,gw0$circular)
+  walkhist = lapply(1:nwalk,function(i){list(gw0)}) #initialize nwalk walkers at the same point
+  hashhist = lapply(1:nwalk,function(i){gw0$hash}) #initialize hashes
+  edges = lapply(1:nwalk,function(i){internal.edges}) #initialize edge table
+  for (i in seq_len(nwalk)){
+  for (j in seq_len(nsteps-1)){
+	newedges = permute.node(edges[[i]])	
+	newwalk = traverse_graph_cpp(newedges,loose.ends)
+	newhash = hash_snodelist(newwalk$snode.id,newwalk$circular)
+	edges[[i]] = newedges
+	newwalk$hash = newhash
+	walkhist[[i]][[j+1]] = newwalk 
+	hashhist[[i]] = c(hashhist[[i]],newhash)	
+  }}
+  if (return.edges){
+	hashhist = list(hashes=hashhist,starter_edges = internal.edges)
+	walkhist = list(walks=walkhist,starter_edges = internal.edges)
+  }
+  if (onlyhash){
+	  return(hashhist)
+  } else{
+	  return(walkhist)
+  }
+}
+
+
 markov.gwalk = function(gg,len,self.avoid = F,attempts = 10,return.gw=F){
   wiring = gg.to.wiring(gg)
   internal.edges = wiring$internal.edges
@@ -480,7 +526,7 @@ alignscore_compl = function(x,y,gp){
 	else{return(s1)}
 }
 
-edit_dist_cpp = function(gwx,gwy,graph=NULL,thresh=0,return_all = F){
+edit_dist_cpp = function(gwx,gwy,graph=NULL,thresh=0,return_all = F,constpenalty=F){
 	if (is.null(graph)){
 		graph = gwx$graph
 		if (is.null(graph)){
@@ -490,11 +536,14 @@ edit_dist_cpp = function(gwx,gwy,graph=NULL,thresh=0,return_all = F){
 
 	nodedt = graph$nodes$dt[,.(width,node.id)]
 	widthvec = setNames(graph$nodes$dt$width,graph$nodes$dt$node.id)
-
 	ids = as.integer(names(widthvec))
 	max_id = max(abs(ids))
 	penalty = numeric(max_id)
-	penalty[abs(ids)] = -widthvec
+	if (constpenalty){
+		penalty[abs(ids)] = -1
+	}else{
+		penalty[abs(ids)] = -widthvec
+	}
 
 	sn_x = sort_snodes(gwx$snode.id,gwx$circular)$nodelist
 	sn_y = sort_snodes(gwy$snode.id,gwy$circular)$nodelist
