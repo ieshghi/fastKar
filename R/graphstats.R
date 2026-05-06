@@ -68,7 +68,7 @@ sample.gwalks = function(gg,N=1,mc.cores=1,chunksize = 1e3,return.gw=T,remove.du
   }
   
   if(verbose){
-  	message('Hashing and keeping unique permutations')
+  	message('Only keeping unique permutations')
   }
   hashes = unlist(mclapply(perms,digest,mc.cores=mc.cores))
 
@@ -96,7 +96,7 @@ sample.gwalks = function(gg,N=1,mc.cores=1,chunksize = 1e3,return.gw=T,remove.du
   }
   if (onlyhash){
   		hash.dt = data.table(hash=unlist(walks.out))[,idx:=.I][,id:=1:.N,by=hash]
-		return(hash.dt)
+  		if (remove.dups){return(unique(hash.dt$hash))}else{return(hash.dt)}
   }else{if (remove.dups){
   	if (return.gw){
   	        hashes = do.call('c',mclapply(walks.out,function(w){w$hash},mc.cores=mc.cores))}
