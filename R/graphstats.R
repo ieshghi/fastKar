@@ -76,7 +76,7 @@ sample.gwalks = function(gg,N=1,mc.cores=1,chunksize = 1e3,return.gw=T,remove.du
   	message('Generating walks')
   }
   dt = data.table(hash=hashes,idx=1:N)[,id:=1:.N,by=hash]
-  uniqueperms = perms[dt[id==1]$idx]
+  if(remove.dups){uniqueperms = perms[dt[id==1]$idx]}else{uniqueperms = perms}
   permchunks = split(uniqueperms, ceiling(seq_along(uniqueperms)/chunksize))
   makewalk_chunk <- function(permchunk) {
     ws = lapply(permchunk,function(p){traverse_graph_cpp(internal.edges[,right:=p],loose.ends)})
