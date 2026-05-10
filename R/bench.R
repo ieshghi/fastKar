@@ -1,8 +1,10 @@
 # fastKar — benchmark helpers
 #
 # Tracks per-phase runtime for traverse and hash so we can compare baseline
-# (traverse_graph_cpp) against new implementations as we land them. Verifies
-# correctness via hash_snodelist multiset comparison.
+# (traverse_graph_cpp + hash_snodelist) against new implementations as we
+# land them. Verifies correctness via partition-equivalence: two configs are
+# considered equivalent iff they group samples into the same equivalence
+# classes (regardless of how they spell their hash strings).
 
 #' Standard synthetic benchmark battery.
 #'
@@ -61,23 +63,36 @@ bench_real_graphs <- function(dir = "bench/graphs") {
   out
 }
 
-#' Compare traversal implementations on a single graph.
+#' Default benchmark configs: baseline, traverse-only, traverse+hash.
+#' @export
+bench_default_configs <- function() {
+  list(
+    v1     = list(traverse = traverse_graph_cpp,    hash = hash_snodelist),       # baseline
+    v2t    = list(traverse = traverse_graph_v2_cpp, hash = hash_snodelist),       # v2 traversal, R hash
+    v2t_h2 = list(traverse = traverse_graph_v2_cpp, hash = hash_karyotype_cpp)    # v2 traversal + v2 hash
+  )
+}
+
+# Internal: partition fingerprint — for each element, the position of its
+# first occurrence in the vector. Two hash vectors that induce the same
+# equivalence relation will produce identical match(h, h) regardless of
+# what their hash strings spell.
+.bench_partition <- function(h) match(h, h)
+
+#' Compare configs (each a (traverse, hash) pair) on a single graph.
 #'
-#' Verifies output equivalence via hash_snodelist multiset comparison on a
-#' fixed pre-sampled set of permutations; aborts on mismatch. Returns a
-#' data.table with one row per (version, phase).
+#' Verifies that all configs produce the same partition of the N samples
+#' into equivalence classes; aborts on mismatch.
 #'
 #' @param gg          a gGraph
 #' @param N           number of permutation samples to time
-#' @param impls       named list of traversal functions to compare; each takes
-#'                    (internal.edges, loose.ends) like traverse_graph_cpp
+#' @param configs     named list of list(traverse, hash); see bench_default_configs()
 #' @param graph_name  string label for result rows
 #' @param seed        random seed for permutation generation
 #' @export
 bench_one_graph <- function(gg,
                             N          = 1000,
-                            impls      = list(v1 = traverse_graph_cpp,
-                                              v2 = traverse_graph_v2_cpp),
+                            configs    = bench_default_configs(),
                             graph_name = NA_character_,
                             seed       = 1) {
 
@@ -90,39 +105,44 @@ bench_one_graph <- function(gg,
     internal.edges[, if (.N > 1) sample(right, .N) else right, by = n]$V1
   })
 
-  out        <- list()
-  ref_hashes <- NULL
-  ref_name   <- names(impls)[1]
+  out          <- list()
+  ref_part     <- NULL
+  ref_name     <- names(configs)[1]
 
-  for (impl_name in names(impls)) {
-    impl <- impls[[impl_name]]
+  for (cfg_name in names(configs)) {
+    cfg <- configs[[cfg_name]]
 
     gc(verbose = FALSE)
     t_traverse <- system.time({
-      walks <- lapply(perms, function(p) impl(internal.edges[, right := p], loose.ends))
+      walks <- lapply(perms,
+                      function(p) cfg$traverse(internal.edges[, right := p], loose.ends))
     })
 
     gc(verbose = FALSE)
     t_hash <- system.time({
       hashes <- vapply(walks,
-                       function(w) hash_snodelist(w$snode.id, w$circular),
+                       function(w) cfg$hash(w$snode.id, w$circular),
                        character(1))
     })
 
-    if (is.null(ref_hashes)) {
-      ref_hashes <- sort(hashes)
-    } else if (!identical(sort(hashes), ref_hashes)) {
+    part <- .bench_partition(hashes)
+    if (is.null(ref_part)) {
+      ref_part <- part
+    } else if (!identical(part, ref_part)) {
       stop(sprintf(
-        "Canonical karyotype-hash multisets differ between '%s' and '%s' on graph '%s' (N=%d).",
-        ref_name, impl_name, graph_name, N))
+        "Sample partitions differ between '%s' and '%s' on '%s' (N=%d): %d vs %d unique classes.",
+        ref_name, cfg_name, graph_name, N,
+        length(unique(ref_part)), length(unique(part))))
     }
 
+    elapsed_t <- unname(t_traverse["elapsed"])
+    elapsed_h <- unname(t_hash["elapsed"])
     out[[length(out) + 1L]] <- data.table::data.table(
       graph   = graph_name,
       N       = N,
-      version = impl_name,
-      phase   = c("traverse", "hash"),
-      seconds = c(unname(t_traverse["elapsed"]), unname(t_hash["elapsed"]))
+      version = cfg_name,
+      phase   = c("traverse", "hash", "total"),
+      seconds = c(elapsed_t, elapsed_h, elapsed_t + elapsed_h)
     )
   }
 
@@ -132,13 +152,12 @@ bench_one_graph <- function(gg,
 #' Run the full benchmark battery and append results to history.
 #'
 #' @param Ns           vector of sample sizes per graph
-#' @param impls        named list of traversal implementations
+#' @param configs      named list of (traverse, hash) configs
 #' @param history_path rds file collecting results across runs
 #' @param graphs       named list of graphs; if NULL, uses synthetic+real
 #' @export
 bench_all <- function(Ns           = c(1000, 10000),
-                      impls        = list(v1 = traverse_graph_cpp,
-                                          v2 = traverse_graph_v2_cpp),
+                      configs      = bench_default_configs(),
                       history_path = "bench/history.rds",
                       graphs       = NULL) {
 
@@ -151,7 +170,7 @@ bench_all <- function(Ns           = c(1000, 10000),
   for (gname in names(graphs)) {
     for (N in Ns) {
       message(sprintf("[bench] %s N=%d", gname, N))
-      r <- bench_one_graph(graphs[[gname]], N = N, impls = impls,
+      r <- bench_one_graph(graphs[[gname]], N = N, configs = configs,
                            graph_name = gname)
       results[[length(results) + 1L]] <- r
     }
@@ -161,7 +180,7 @@ bench_all <- function(Ns           = c(1000, 10000),
   results[, date       := Sys.time()]
   results[, git_commit := tryCatch(system("git rev-parse HEAD", intern = TRUE),
                                    error = function(e) NA_character_)]
-  results[, n_impls    := length(impls)]
+  results[, n_configs  := length(configs)]
 
   if (!dir.exists(dirname(history_path))) {
     dir.create(dirname(history_path), recursive = TRUE)
