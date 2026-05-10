@@ -63,13 +63,28 @@ bench_real_graphs <- function(dir = "bench/graphs") {
   out
 }
 
-#' Default benchmark configs: baseline, traverse-only, traverse+hash.
+#' Default benchmark configs: baseline, traverse-only, traverse+hash, batched.
+#'
+#' A config is a list with:
+#'   * traverse     : per-sample function `(internal.edges, loose.ends) -> walks`
+#'                    (when batch = FALSE, the default)
+#'                    OR
+#'                    batch function `(internal.edges, perms_list, loose.ends)
+#'                    -> list of walks` (when batch = TRUE)
+#'   * hash         : per-walk function `(snode.id, circular) -> chr`
+#'   * batch        : optional logical (default FALSE)
 #' @export
 bench_default_configs <- function() {
   list(
-    v1     = list(traverse = traverse_graph_cpp,    hash = hash_snodelist),       # baseline
-    v2t    = list(traverse = traverse_graph_v2_cpp, hash = hash_snodelist),       # v2 traversal, R hash
-    v2t_h2 = list(traverse = traverse_graph_v2_cpp, hash = hash_karyotype_cpp)    # v2 traversal + v2 hash
+    v1           = list(traverse = traverse_graph_cpp,
+                        hash     = hash_snodelist),                   # baseline
+    v2t          = list(traverse = traverse_graph_v2_cpp,
+                        hash     = hash_snodelist),                   # v2 traversal, R hash
+    v2t_h2       = list(traverse = traverse_graph_v2_cpp,
+                        hash     = hash_karyotype_cpp),               # v2 traversal + v2 hash
+    v2t_batch_h2 = list(traverse = traverse_graph_v2_batch_cpp,
+                        hash     = hash_karyotype_cpp,
+                        batch    = TRUE)                              # batched + v2 hash
   )
 }
 
@@ -111,11 +126,16 @@ bench_one_graph <- function(gg,
 
   for (cfg_name in names(configs)) {
     cfg <- configs[[cfg_name]]
+    is_batch <- isTRUE(cfg$batch)
 
     gc(verbose = FALSE)
     t_traverse <- system.time({
-      walks <- lapply(perms,
-                      function(p) cfg$traverse(internal.edges[, right := p], loose.ends))
+      walks <- if (is_batch) {
+        cfg$traverse(internal.edges, perms, loose.ends)
+      } else {
+        lapply(perms,
+               function(p) cfg$traverse(internal.edges[, right := p], loose.ends))
+      }
     })
 
     gc(verbose = FALSE)

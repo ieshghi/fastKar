@@ -17,3 +17,7 @@ traverse_graph_v2_cpp <- function(A, loose_ends) {
     .Call(`_fastKar_traverse_graph_v2_cpp`, A, loose_ends)
 }
 
+traverse_graph_v2_batch_cpp <- function(A, perms, loose_ends) {
+    .Call(`_fastKar_traverse_graph_v2_batch_cpp`, A, perms, loose_ends)
+}
+
