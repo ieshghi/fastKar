@@ -35,10 +35,23 @@ BEGIN_RCPP
     return rcpp_result_gen;
 END_RCPP
 }
+// traverse_graph_v2_cpp
+List traverse_graph_v2_cpp(DataFrame A, NumericVector loose_ends);
+RcppExport SEXP _fastKar_traverse_graph_v2_cpp(SEXP ASEXP, SEXP loose_endsSEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    Rcpp::traits::input_parameter< DataFrame >::type A(ASEXP);
+    Rcpp::traits::input_parameter< NumericVector >::type loose_ends(loose_endsSEXP);
+    rcpp_result_gen = Rcpp::wrap(traverse_graph_v2_cpp(A, loose_ends));
+    return rcpp_result_gen;
+END_RCPP
+}
 
 static const R_CallMethodDef CallEntries[] = {
     {"_fastKar_compute_cost_matrix_cpp", (DL_FUNC) &_fastKar_compute_cost_matrix_cpp, 3},
     {"_fastKar_traverse_graph_cpp", (DL_FUNC) &_fastKar_traverse_graph_cpp, 2},
+    {"_fastKar_traverse_graph_v2_cpp", (DL_FUNC) &_fastKar_traverse_graph_v2_cpp, 2},
     {NULL, NULL, 0}
 };
 

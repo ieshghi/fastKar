@@ -9,3 +9,7 @@ traverse_graph_cpp <- function(A, loose_ends) {
     .Call(`_fastKar_traverse_graph_cpp`, A, loose_ends)
 }
 
+traverse_graph_v2_cpp <- function(A, loose_ends) {
+    .Call(`_fastKar_traverse_graph_v2_cpp`, A, loose_ends)
+}
+
