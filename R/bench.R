@@ -6,12 +6,16 @@
 
 #' Standard synthetic benchmark battery.
 #'
-#' Returns a named list of gGraph objects.
+#' Returns a named list of gGraph objects. `gimme_bfb` is stochastic (random
+#' BFB breakpoints), so we seed before generating each graph to make sizes
+#' reproducible across runs — important for tracking speedups over time.
 #' @export
-bench_synthetic_graphs <- function() {
+bench_synthetic_graphs <- function(seed = 42L) {
+  set.seed(seed); g_bfb_small  <- gimme_bfb(1e6, 8,  cycles = 5)$graph
+  set.seed(seed); g_bfb_medium <- gimme_bfb(1e6, 16, cycles = 8)$graph
   list(
-    bfb_small    = gimme_bfb(1e6, 8,  cycles = 5)$graph,
-    bfb_medium   = gimme_bfb(1e6, 16, cycles = 8)$graph,
+    bfb_small    = g_bfb_small,
+    bfb_medium   = g_bfb_medium,
     repdup_cis1  = makerepdup(1e6, geometry = "cis1")$graph,
     repdup_trans = makerepdup(1e6, geometry = "trans")$graph
   )
@@ -19,22 +23,42 @@ bench_synthetic_graphs <- function() {
 
 #' Load real-data graphs from bench/graphs/*.rds (if present).
 #'
-#' Each .rds must deserialize to a gGraph or a list/object whose `$graph` slot
-#' is a gGraph. Names are taken from file basenames. Empty list if the
-#' directory is missing or empty.
+#' Each .rds may deserialize to:
+#'   * a gGraph directly
+#'   * an object with a `$graph` slot that is a gGraph
+#'   * a list whose elements are gGraphs (each becomes its own bench entry,
+#'     named `<basename>__<elemname-or-index>`)
+#' Empty list if the directory is missing or empty.
 #' @export
 bench_real_graphs <- function(dir = "bench/graphs") {
   if (!dir.exists(dir)) return(list())
   paths <- list.files(dir, pattern = "\\.rds$", full.names = TRUE)
   if (!length(paths)) return(list())
-  graphs <- lapply(paths, function(p) {
-    obj <- readRDS(p)
-    if (inherits(obj, "gGraph"))                       obj
-    else if (is.list(obj) && !is.null(obj$graph))      obj$graph
-    else stop("File ", p, " did not contain a gGraph or an object with $graph")
-  })
-  names(graphs) <- tools::file_path_sans_ext(basename(paths))
-  graphs
+
+  out <- list()
+  for (p in paths) {
+    base <- tools::file_path_sans_ext(basename(p))
+    obj  <- readRDS(p)
+
+    if (inherits(obj, "gGraph")) {
+      out[[base]] <- obj
+    } else if (is.list(obj) && !is.null(obj$graph) && inherits(obj$graph, "gGraph")) {
+      out[[base]] <- obj$graph
+    } else if (is.list(obj)) {
+      gg_idx <- which(vapply(obj, inherits, logical(1), what = "gGraph"))
+      if (!length(gg_idx)) {
+        stop("File ", p, " contained no gGraph objects")
+      }
+      labels <- if (!is.null(names(obj))) names(obj)[gg_idx] else as.character(gg_idx)
+      labels[is.na(labels) | labels == ""] <- as.character(gg_idx[is.na(labels) | labels == ""])
+      for (k in seq_along(gg_idx)) {
+        out[[paste0(base, "__", labels[k])]] <- obj[[gg_idx[k]]]
+      }
+    } else {
+      stop("File ", p, " did not contain a gGraph, an object with $graph, or a list of gGraphs")
+    }
+  }
+  out
 }
 
 #' Compare traversal implementations on a single graph.
