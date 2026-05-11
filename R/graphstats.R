@@ -295,20 +295,34 @@ hash_snodelist = function(snode.id,circular){
 }
 
 sort_snodes = function(nodelist,circ=NULL) {
+	# Canonicalize circular walks to their Booth lex-min rotation in place;
+	# we still need the raw walk later to compute Booth(rc(W)) properly.
 	if (sum(circ)>0){
 		circ_walks = nodelist[circ]
 		circ_walks_rot = lapply(circ_walks,function(w){
-			return(booth_rotate(w))	
+			return(booth_rotate(w))
 	})
 		nodelist[circ] = circ_walks_rot
 	}
-	choose_compl = lapply(nodelist, function(x) {
+	# For each walk pick the lex-min over its rotation+RC orbit.
+	# Linear:   compare W and rc(W).
+	# Circular: compare Booth(W) and Booth(rc(W)). The earlier code compared
+	#   Booth(W) to rc(Booth(W)), which is wrong because rc(Booth(W)) is not
+	#   generally the Booth rotation of rc(W) -- they differ by a cyclic
+	#   shift. That left RC-equivalent circular karyotypes presented in
+	#   different rotations with different canonical forms.
+	choose_compl = lapply(seq_along(nodelist), function(i) {
+		x = nodelist[[i]]
 		rc = -rev(x)
+		if (!is.null(circ) && length(circ) >= i && isTRUE(circ[i])) {
+			rc = booth_rotate(rc)
+		}
 		if (paste(x, collapse = ",") <= paste(rc, collapse = ",")) {
 			x
 		} else {
 			rc
-		}})
+		}
+	})
 	ord <- order(sapply(choose_compl, paste, collapse = ","))
 	sorted_nodes = choose_compl[ord]
 	if (!is.null(circ)){

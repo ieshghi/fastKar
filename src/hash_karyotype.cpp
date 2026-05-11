@@ -7,21 +7,21 @@
 using namespace Rcpp;
 
 // Canonical-karyotype hash, C++ replacement for hash_snodelist (R/graphstats.R).
-// Behavior matches v1 for the partition relation it induces:
-//   1. For each circular walk: rotate to its lex-min rotation (Booth).
-//   2. For each walk: replace with min(walk, rc(walk)) lex-wise, where
-//      rc(w)[i] = -w[n-1-i].   (This matches sort_snodes; see note below.)
-//   3. Build a multiset including each canonicalized walk AND its rc (the
-//      "doubling" from hash_snodelist) annotated with its circular flag.
+//   1. For each circular walk: take lex-min over the full rotation+RC orbit
+//      by comparing Booth(W) with Booth(rc(W)) and keeping the smaller.
+//   2. For each linear walk: replace with min(W, rc(W)) lex-wise.
+//      rc(w)[i] = -w[n-1-i].
+//   3. Build a multiset that doubles each entry with its rc (kept from the
+//      original hash_snodelist; redundant under (1)+(2) but cheap).
 //   4. Sort the multiset lex.
 //   5. FNV-1a 64-bit hash over the bytes; return as a 16-char hex string.
 //
-// Note on canonicalization: for circular walks, R's sort_snodes computes
-// rc(Booth(W)) and compares against Booth(W), rather than Booth(rc(W))
-// vs Booth(W). For a strict canonical form under cyclic+RC equivalence
-// you'd want the latter. We deliberately replicate the former here so
-// the v1/v2 partition equivalence check in the benchmark passes; tightening
-// the canonicalization is a separate (correctness) PR.
+// The earlier version of this code, and R's sort_snodes today, compute
+// rc(Booth(W)) instead of Booth(rc(W)) in step (1). The two differ by a
+// cyclic rotation in general, so circular karyotypes presented in different
+// rotations of the same orbit ended up with different canonical forms. Fixed
+// here and in R's sort_snodes; both paths now produce the genuine canonical
+// representative of the rotation+RC orbit.
 
 // ----------------------------------------------------------------------------
 // Booth's algorithm: index of the lex-min cyclic rotation of s.
@@ -68,12 +68,6 @@ static std::vector<int> rc_walk(const std::vector<int>& s) {
   return r;
 }
 
-// Replace s with min(s, rc(s)) lex-wise.
-static void rc_canonicalize_inplace(std::vector<int>& s) {
-  std::vector<int> r = rc_walk(s);
-  if (r < s) s = std::move(r);
-}
-
 // ----------------------------------------------------------------------------
 // FNV-1a 64-bit byte stream hash.
 // ----------------------------------------------------------------------------
@@ -99,15 +93,25 @@ std::string hash_karyotype_cpp(List snode_id, LogicalVector circular) {
   if (K != circular.size())
     Rcpp::stop("hash_karyotype_cpp: snode_id and circular have different lengths");
 
-  // 1. Pull walks; canonicalize each (Booth on circular, then RC-min).
+  // 1. Pull walks; canonicalize each.
+  //    Circular: pick min(Booth(W), Booth(rc(W))) over the rotation+RC orbit.
+  //    Linear:   pick min(W, rc(W)) lex.
   std::vector<std::vector<int>> walks(K);
   std::vector<bool> circ(K);
   for (int k = 0; k < K; k++) {
     IntegerVector iv = snode_id[k];
-    walks[k].assign(iv.begin(), iv.end());
+    std::vector<int> w(iv.begin(), iv.end());
     circ[k] = (bool)circular[k];
-    if (circ[k]) apply_booth_rotation(walks[k]);
-    rc_canonicalize_inplace(walks[k]);
+
+    if (circ[k]) {
+      std::vector<int> w_rc = rc_walk(w);
+      apply_booth_rotation(w);                 // w    = Booth(W)
+      apply_booth_rotation(w_rc);              // w_rc = Booth(rc(W))
+      walks[k] = (w_rc < w) ? std::move(w_rc) : std::move(w);
+    } else {
+      std::vector<int> w_rc = rc_walk(w);
+      walks[k] = (w_rc < w) ? std::move(w_rc) : std::move(w);
+    }
   }
 
   // 2. Build doubled multiset: (walk, circ) + (rc(walk), circ).
