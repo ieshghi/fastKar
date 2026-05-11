@@ -38,10 +38,19 @@ gg.to.wiring <- function(gg){
 
 #' @import pbmcapply
 #' @import digest
-sample.gwalks = function(gg,N=1,mc.cores=1,chunksize = 1e3,return.gw=T,remove.dups=T,verbose=T,onlyhash=F,keep.circular=T){ 
+sample.gwalks = function(gg,N=1,mc.cores=1,chunksize = 1e3,return.gw=T,remove.dups=T,verbose=T,onlyhash=F,keep.circular=T,
+                         legacy = FALSE){
+  # legacy = FALSE (default): use traverse_graph_v2_batch_cpp for traversal and
+  #   hash_karyotype_cpp for the post-traversal dedup. Same equivalence relation
+  #   as legacy = TRUE (verified by partition match across the bench battery),
+  #   typically 20-200x faster end-to-end depending on graph size.
+  # legacy = TRUE: original code path (traverse_graph_cpp + hash_snodelist).
   wiring = gg.to.wiring(gg)
   internal.edges = wiring$internal.edges
   loose.ends = wiring$loose.ends
+
+  hash_fn <- if (legacy) hash_snodelist else hash_karyotype_cpp
+
   if(verbose){
   message('Sampling permutations')
   }
@@ -66,7 +75,7 @@ sample.gwalks = function(gg,N=1,mc.cores=1,chunksize = 1e3,return.gw=T,remove.du
   		perms <- mclapply(seq_len(N), function(i) shuffle_edges(internal.edges),mc.cores = mc.cores)
 	}
   }
-  
+
   if(verbose){
   	message('Only keeping unique permutations')
   }
@@ -79,15 +88,19 @@ sample.gwalks = function(gg,N=1,mc.cores=1,chunksize = 1e3,return.gw=T,remove.du
   uniqueperms = perms[dt[id==1]$idx]
   permchunks = split(uniqueperms, ceiling(seq_along(uniqueperms)/chunksize))
   makewalk_chunk <- function(permchunk) {
-    ws = lapply(permchunk,function(p){traverse_graph_cpp(internal.edges[,right:=p],loose.ends)})
+    if (legacy) {
+      ws = lapply(permchunk,function(p){traverse_graph_cpp(internal.edges[,right:=p],loose.ends)})
+    } else {
+      ws = traverse_graph_v2_batch_cpp(internal.edges, permchunk, loose.ends)
+    }
     if (return.gw){
       ws = lapply(ws,function(w){gW(graph=gg,snode.id=w$snode.id,circular=w$circular)})
     }
     if (onlyhash){
-	return(lapply(ws,function(w){hash_snodelist(w$snode.id,w$circular)}))
+	return(lapply(ws,function(w){hash_fn(w$snode.id,w$circular)}))
     } else{
     	return(ws)
-    } 
+    }
   }
   if(verbose){
   	walks.out <- do.call('c',pbmclapply(permchunks, makewalk_chunk,mc.cores = mc.cores))
@@ -101,10 +114,10 @@ sample.gwalks = function(gg,N=1,mc.cores=1,chunksize = 1e3,return.gw=T,remove.du
   	if (return.gw){
   	        hashes = do.call('c',mclapply(walks.out,function(w){w$hash},mc.cores=mc.cores))}
   	else{
-  	        hashes = do.call('c',mclapply(walks.out,function(w){hash_snodelist(w$snode.id,w$circular)},mc.cores=mc.cores))}
+  	        hashes = do.call('c',mclapply(walks.out,function(w){hash_fn(w$snode.id,w$circular)},mc.cores=mc.cores))}
   	hash.dt = data.table(hash=hashes)[,idx:=.I][,id:=1:.N,by=hash]
   	walks.out = walks.out[hash.dt[id==1]$idx]
-  } 
+  }
   if (!keep.circular){
 	  keep = unlist(lapply(walks.out,function(w){sum(w$circular)==0}))
 	  walks.out = walks.out[keep]
