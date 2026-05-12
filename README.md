@@ -142,9 +142,9 @@ indistinguishable from the ground-truth's:
 
 ![best fit vs truth](man/figures/fig_bestfit_vs_truth.png)
 
-For simple and long-range SV events (multi-way translocations) the karyotype space is small
-and Hi-C is sufficient to localize truth tightly. For more complex and local
-creating many segment copies (BFB amplicons, ecDNA) the karyotype space will be exponentially larger and
+For simple and long-range SV events (e.g. multi-way translocations) the karyotype space is small
+and Hi-C is sufficient to localize truth tightly. For more complex and local alterations
+that duplicate segments (e.g. BFB amplicons, ecDNA) the karyotype space will be exponentially larger and
 `bestfit_search` may be becomes a localiser over a wider neighborhood of similar
 karyotypes rather than a point estimator — the same pipeline scales to both regimes.
 
