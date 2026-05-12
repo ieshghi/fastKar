@@ -1,2 +1,9 @@
 .Rproj.user
 R/raw.prm
+
+# Build artifacts -- never commit; users build on their end via R CMD INSTALL
+src/*.o
+src/*.so
+src/*.dll
+src/symbols.rds
+.ipynb_checkpoints/
