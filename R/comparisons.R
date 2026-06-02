@@ -85,32 +85,32 @@ test.walks.with.hic <- function(walkset,hic.data,resolution=1e5,mc.cores=1,depth
     }
 }
 
-compmaps <- function(map_test,map_true,theta=0,ifsum=FALSE,ifscale = FALSE,if.diag=TRUE,mask=NULL,return_kl=F,area0=NULL){ 
+compmaps <- function(map_exp,map_theory,theta=2,ifsum=F,if.diag=T,ifscale=F,mask=NULL,return_kl=F,area0=NULL){ 
     if (!is.null(mask)){
-        gr = map_true$gr %&% mask
+        gr = map_theory$gr %&% mask
         bad.inds = gr$tile.id
-        trudat = map_true$dat
+        trudat = map_theory$dat
         trudat[i %in% bad.inds,value:=0]
         trudat[j %in% bad.inds,value:=0]
-        map_true = gM(gr=map_true$gr,dat=trudat)
+        map_theory = gM(gr=map_theory$gr,dat=trudat)
     }
    if (is.null(area0)){
-	gr = map_true$gr
+	gr = map_theory$gr
         medianwid = median(width(gr))
 	area0 = medianwid^2
    }
-    template = make_template_dat(map_true$gr)
-    #returns the negative log likelihood of test map given true map and negative-binomial noise
-    dat_test = merge.data.table(template[,.(i,j,widthprod,id)],map_test$dat[,.(i,j,value)],all.x=TRUE,by=c('i','j'))
-    dat_true = merge.data.table(template[,.(i,j,widthprod,id)],map_true$dat[,.(i,j,value)],all.x=TRUE,by=c('i','j'))
-    dat_test[is.na(value),value:=0]
-    dat_true[is.na(value),value:=0]
-    comp_dat = compdats(dat_test,dat_true,theta,ifscale,ifsum=FALSE,if.diag=if.diag,return_kl=return_kl,area0=area0)
-    if (ifsum){
-        return(sum(comp_dat$value))
-    }else{
-        return(gM(gr=map_true$gr,dat=comp_dat))
-    }
+   map_theory = map_theory$disjoin(map_exp$gr)$agg(map_exp$gr,weighted=T)
+   template = make_template_dat(map_exp$gr)
+   dat_exp = merge.data.table(template[,.(i,j,widthprod,id)],map_exp$dat[,.(i,j,value)],all.x=TRUE,by=c('i','j'))
+   dat_theory = merge.data.table(template[,.(i,j,widthprod,id)],map_theory$dat[,.(i,j,value)],all.x=TRUE,by=c('i','j'))
+   dat_exp[is.na(value),value:=0]
+   dat_theory[is.na(value),value:=0]
+   comp_dat = compdats(dat_exp,dat_theory,theta,ifsum=FALSE,if.diag=if.diag,return_kl=return_kl,area0=area0)
+   if (ifsum){
+       return(sum(comp_dat$value))
+   }else{
+       return(gM(gr=map_exp$gr,dat=comp_dat))
+   }
 }
 
 estimate.depthratio <- function(filepath,mode='hic',res=1e6,ploidy=2,if.chr=FALSE){ #put here hic data for a whole genome
@@ -128,21 +128,13 @@ estimate.depthratio <- function(filepath,mode='hic',res=1e6,ploidy=2,if.chr=FALS
     return(depthest.hic$value%>%sum * 300 / 3e9 * 2/ploidy)
 }
 
-compdats <- function(dat_test,dat_true,theta=0,ifscale=FALSE,ifsum=TRUE,checkinds=TRUE,if.diag=TRUE,return_kl=F,area0=1e8){
+#returns negative log likelihood of test data given true data
+compdats <- function(dat_test,dat_true,theta=2,ifsum=TRUE,if.diag=TRUE,return_kl=F,area0=1e8){
     if (is.null(dat_test$widthprod)){
         dat_test$widthprod= area0 #if the data.table doesn't have an area column, assume all pixels are the same size
     }
-    if(checkinds){
-        setkeyv(dat_test,c('i','j'))
-        setkeyv(dat_true,c('i','j'))
-        dat_test[,id:=.I]
-        dat_true[,id:=.I]
-    }
-    if (ifscale){
-        dat_test_scale = (dat_test$value)*mean(dat_true$value,na.rm=TRUE)/mean(dat_test$value,na.rm=TRUE) #re-scale using means
-        dat_test$value = dat_test_scale
-    }
-    combdat = merge.data.table(dat_test[,.(i,j,widthprod,id,value)],dat_true[,.(id,value)],by='id')
+    if (!all.equal(dat_test[,.(i,j,id)],dat_true[,.(i,j,id)])){stop('Equalize gMatrices before comparing data')}
+    combdat = merge.data.table(dat_test[,.(i,j,id,widthprod,value)],dat_true[,.(id,value)],by=c('id'))
     if(if.diag==FALSE){
         combdat = combdat[i!=j]
     }
