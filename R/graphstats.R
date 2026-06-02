@@ -90,17 +90,17 @@ sample.gwalks = function(gg,N=1,mc.cores=1,chunksize = 1e3,return.gw=T,remove.du
 	}
   }
 
-  if(verbose){
+  if(verbose & remove.dups){
   	message('Only keeping unique permutations')
   }
   hashes = unlist(mclapply(perms,digest,mc.cores=mc.cores))
+  dt = data.table(hash=hashes,idx=1:N)[,id:=1:.N,by=hash]
+  if(remove.dups){uniqueperms = perms[dt[id==1]$idx]}else{uniqueperms = perms}
+  permchunks = split(uniqueperms, ceiling(seq_along(uniqueperms)/chunksize))
 
   if(verbose){
   	message('Generating walks')
   }
-  dt = data.table(hash=hashes,idx=1:N)[,id:=1:.N,by=hash]
-  if(remove.dups){uniqueperms = perms[dt[id==1]$idx]}else{uniqueperms = perms}
-  permchunks = split(uniqueperms, ceiling(seq_along(uniqueperms)/chunksize))
   makewalk_chunk <- function(permchunk) {
     if (legacy) {
       ws = lapply(permchunk,function(p){traverse_graph_cpp(internal.edges[,right:=p],loose.ends)})
