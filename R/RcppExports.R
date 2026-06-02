@@ -5,7 +5,19 @@ compute_cost_matrix_cpp <- function(sn_x, sn_y, penalty) {
     .Call(`_fastKar_compute_cost_matrix_cpp`, sn_x, sn_y, penalty)
 }
 
+hash_karyotype_cpp <- function(snode_id, circular) {
+    .Call(`_fastKar_hash_karyotype_cpp`, snode_id, circular)
+}
+
 traverse_graph_cpp <- function(A, loose_ends) {
     .Call(`_fastKar_traverse_graph_cpp`, A, loose_ends)
+}
+
+traverse_graph_v2_cpp <- function(A, loose_ends) {
+    .Call(`_fastKar_traverse_graph_v2_cpp`, A, loose_ends)
+}
+
+traverse_graph_v2_batch_cpp <- function(A, perms, loose_ends) {
+    .Call(`_fastKar_traverse_graph_v2_batch_cpp`, A, perms, loose_ends)
 }
 

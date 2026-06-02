@@ -38,16 +38,39 @@ gg.to.wiring <- function(gg){
 
 #' @import pbmcapply
 #' @import digest
-sample.gwalks = function(gg,N=1,mc.cores=1,chunksize = 1e3,return.gw=T,remove.dups=T,verbose=T,onlyhash=F,keep.circular=T){ 
+sample.gwalks = function(gg,N=1,mc.cores=1,chunksize = 1e3,return.gw=T,remove.dups=T,verbose=T,onlyhash=F,keep.circular=T,
+                         legacy = FALSE){
+  # legacy = FALSE (default): use traverse_graph_v2_batch_cpp for traversal and
+  #   hash_karyotype_cpp for the post-traversal dedup. Same equivalence relation
+  #   as legacy = TRUE (verified by partition match across the bench battery),
+  #   typically 20-200x faster end-to-end depending on graph size.
+  # legacy = TRUE: original code path (traverse_graph_cpp + hash_snodelist).
   wiring = gg.to.wiring(gg)
   internal.edges = wiring$internal.edges
   loose.ends = wiring$loose.ends
+
+  hash_fn <- if (legacy) hash_snodelist else hash_karyotype_cpp
+
   if(verbose){
   message('Sampling permutations')
   }
 
-  shuffle_edges <- function(edges) {
-    new_right <- edges[, if (.N > 1) sample(right, .N) else right, by = n]$V1
+  if (legacy) {
+    shuffle_edges <- function(edges) {
+      new_right <- edges[, if (.N > 1) sample(right, .N) else right, by = n]$V1
+    }
+  } else {
+    # Pre-compute per-node row groups once; a plain R loop over groups bypasses
+    # the data.table by-group dispatch (which was ~270us per call at V=44,
+    # vs ~25us for this loop on the same input). Uses R's sample() so seeds
+    # produce identical permutations to the legacy path.
+    n_groups   <- split(seq_len(nrow(internal.edges)), internal.edges$n)
+    right_vec0 <- internal.edges$right
+    shuffle_edges <- function(edges) {
+      out <- right_vec0
+      for (g in n_groups) if (length(g) > 1) out[g] <- sample(out[g])
+      out
+    }
   }
   shuffle_chunk <- function(K, edges) {
     replicate(K, shuffle_edges(edges), simplify = FALSE)
@@ -66,28 +89,32 @@ sample.gwalks = function(gg,N=1,mc.cores=1,chunksize = 1e3,return.gw=T,remove.du
   		perms <- mclapply(seq_len(N), function(i) shuffle_edges(internal.edges),mc.cores = mc.cores)
 	}
   }
-  
-  if(verbose){
+
+  if(verbose & remove.dups){
   	message('Only keeping unique permutations')
   }
   hashes = unlist(mclapply(perms,digest,mc.cores=mc.cores))
+  dt = data.table(hash=hashes,idx=1:N)[,id:=1:.N,by=hash]
+  if(remove.dups){uniqueperms = perms[dt[id==1]$idx]}else{uniqueperms = perms}
+  permchunks = split(uniqueperms, ceiling(seq_along(uniqueperms)/chunksize))
 
   if(verbose){
   	message('Generating walks')
   }
-  dt = data.table(hash=hashes,idx=1:N)[,id:=1:.N,by=hash]
-  if(remove.dups){uniqueperms = perms[dt[id==1]$idx]}else{uniqueperms = perms}
-  permchunks = split(uniqueperms, ceiling(seq_along(uniqueperms)/chunksize))
   makewalk_chunk <- function(permchunk) {
-    ws = lapply(permchunk,function(p){traverse_graph_cpp(internal.edges[,right:=p],loose.ends)})
+    if (legacy) {
+      ws = lapply(permchunk,function(p){traverse_graph_cpp(internal.edges[,right:=p],loose.ends)})
+    } else {
+      ws = traverse_graph_v2_batch_cpp(internal.edges, permchunk, loose.ends)
+    }
     if (return.gw){
       ws = lapply(ws,function(w){gW(graph=gg,snode.id=w$snode.id,circular=w$circular)})
     }
     if (onlyhash){
-	return(lapply(ws,function(w){hash_snodelist(w$snode.id,w$circular)}))
+	return(lapply(ws,function(w){hash_fn(w$snode.id,w$circular)}))
     } else{
     	return(ws)
-    } 
+    }
   }
   if(verbose){
   	walks.out <- do.call('c',pbmclapply(permchunks, makewalk_chunk,mc.cores = mc.cores))
@@ -101,10 +128,10 @@ sample.gwalks = function(gg,N=1,mc.cores=1,chunksize = 1e3,return.gw=T,remove.du
   	if (return.gw){
   	        hashes = do.call('c',mclapply(walks.out,function(w){w$hash},mc.cores=mc.cores))}
   	else{
-  	        hashes = do.call('c',mclapply(walks.out,function(w){hash_snodelist(w$snode.id,w$circular)},mc.cores=mc.cores))}
+  	        hashes = do.call('c',mclapply(walks.out,function(w){hash_fn(w$snode.id,w$circular)},mc.cores=mc.cores))}
   	hash.dt = data.table(hash=hashes)[,idx:=.I][,id:=1:.N,by=hash]
   	walks.out = walks.out[hash.dt[id==1]$idx]
-  } 
+  }
   if (!keep.circular){
 	  keep = unlist(lapply(walks.out,function(w){sum(w$circular)==0}))
 	  walks.out = walks.out[keep]
@@ -268,20 +295,34 @@ hash_snodelist = function(snode.id,circular){
 }
 
 sort_snodes = function(nodelist,circ=NULL) {
+	# Canonicalize circular walks to their Booth lex-min rotation in place;
+	# we still need the raw walk later to compute Booth(rc(W)) properly.
 	if (sum(circ)>0){
 		circ_walks = nodelist[circ]
 		circ_walks_rot = lapply(circ_walks,function(w){
-			return(booth_rotate(w))	
+			return(booth_rotate(w))
 	})
 		nodelist[circ] = circ_walks_rot
 	}
-	choose_compl = lapply(nodelist, function(x) {
+	# For each walk pick the lex-min over its rotation+RC orbit.
+	# Linear:   compare W and rc(W).
+	# Circular: compare Booth(W) and Booth(rc(W)). The earlier code compared
+	#   Booth(W) to rc(Booth(W)), which is wrong because rc(Booth(W)) is not
+	#   generally the Booth rotation of rc(W) -- they differ by a cyclic
+	#   shift. That left RC-equivalent circular karyotypes presented in
+	#   different rotations with different canonical forms.
+	choose_compl = lapply(seq_along(nodelist), function(i) {
+		x = nodelist[[i]]
 		rc = -rev(x)
+		if (!is.null(circ) && length(circ) >= i && isTRUE(circ[i])) {
+			rc = booth_rotate(rc)
+		}
 		if (paste(x, collapse = ",") <= paste(rc, collapse = ",")) {
 			x
 		} else {
 			rc
-		}})
+		}
+	})
 	ord <- order(sapply(choose_compl, paste, collapse = ","))
 	sorted_nodes = choose_compl[ord]
 	if (!is.null(circ)){

@@ -75,6 +75,37 @@ makerepdup <- function(regsize,geometry){
   return(walk)
 }
 
+# A small three-way reciprocal translocation:
+# chromosomes 1, 2, 3 each broken into segments {A,B,C}, {D,E,F}, {G,H,I}.
+# A cyclic exchange permutes the middle segments: B <-> E <-> H <-> B.
+# Each chromosome carries one normal copy and one rearranged copy.
+make_threeway_repdup <- function(regsize = 1e6) {
+  chroms <- c("1", "2", "3")
+  loci   <- lapply(chroms, function(s) GRanges(s, IRanges(1, regsize * 3)))
+  gr     <- do.call(c, lapply(loci, gr.tile, regsize))[, c()]
+  gr$label <- c("A","B","C", "D","E","F", "G","H","I")
+  gr$cn  <- 1
+  names(gr) <- gr$label
+
+  walks <- list(
+    gr[c("A","B","C")],       # chr1 normal
+    gr[c("D","E","F")],       # chr2 normal
+    gr[c("G","H","I")],       # chr3 normal
+    gr[c("A","B","E","F")],   # chr1 derivative: A-B fused to chr2's E-F via B->E junction
+    gr[c("D","E","H","I")],   # chr2 derivative: D-E fused to chr3's H-I via E->H junction
+    gr[c("G","H","B","C")]    # chr3 derivative: G-H fused to chr1's B-C via H->B junction
+  )
+  
+  gw <- gW(grl = GRangesList(walks))
+  gw$set(cn = 1)
+  gw$nodes$mark(cn = 1)
+  gw$edges$mark(cn = 1)
+  gw$disjoin()
+  gw
+}
+
+
+
 makewalk <- function(tiles,nodewalk,circ=FALSE,background = FALSE,stranded=TRUE){
   segments = gG(nodes=tiles)$gr[,c()]
   segments$node.id = 1:length(segments)

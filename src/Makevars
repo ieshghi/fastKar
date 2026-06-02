@@ -1,0 +1,15 @@
+# Performance flags for fastKar's C++ sources.
+#
+# The tight inner loops in traverse_graph_v2_cpp, traverse_graph_v2_batch_cpp,
+# and hash_karyotype_cpp depend on the compiler vectorising array indexing
+# and inlining lambda helpers. On environments whose default CXXFLAGS are
+# just `-O2` (no SIMD target), the new path can lose most of its advantage
+# over the legacy R/data.table path -- empirically observed on R 4.3 with
+# a vanilla CRAN build.
+#
+# `-march=native` produces a binary tuned to the build machine's CPU. If you
+# need a portable .so (e.g. you build on one node and deploy to another with
+# different SIMD capabilities), replace it with `-march=x86-64-v3` for AVX2
+# baseline compatibility, or `-march=haswell` for the equivalent.
+
+PKG_CXXFLAGS = -march=native -ftree-vectorize -fno-math-errno
