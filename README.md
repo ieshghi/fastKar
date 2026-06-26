@@ -37,7 +37,7 @@ gg
 
 Each of chromosomes 1, 2, 3 is tiled into segments `{A,B,C}`, `{D,E,F}`,
 `{G,H,I}`. Three reciprocal translocations form a directed cycle
-`B → E → H → B`, producing three derivative chromosomes alongside the three
+`B → E → H → B`, producing derivative chromosomes alongside the three
 normal ones.
 
 ![graph](man/figures/fig_graph.png)
