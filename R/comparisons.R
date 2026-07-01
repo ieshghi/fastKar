@@ -235,3 +235,24 @@ callloops = function(hic,gw,depth,fdr_cut = 0.01,resolution = NULL,sim.dat = NUL
 	return(outlier.gm)
 }
 
+identifiable = function(graph,M = 20,kl_cutoff = 10,sim_depth = 10,readlength = 1e5,hic_res = NULL,mc.cores=1,return.all=F){
+	if (is.null(hic_res)){
+		hic_res = 1e3*round(10**(log10(sum(width(event.gg$footprint)))-2.5)/1e3) #about 300 bins across the footprint,rounded off to the nearest kb
+		}
+	gw = sample.gwalks(event.gg,M,verbose=F)
+	gwcomp.dt = data.table(expand.grid(1:length(gw),1:length(gw)))[,.(i=Var1,j=Var2)][j>i][,comp.id:=.I] #all the pairs of walks to compare
+	
+	dists = rbindlist(pblapply(gwcomp.dt$comp.id,function(x){
+		xi = gwcomp.dt[x]$i
+		xj = gwcomp.dt[x]$j
+		lr = longread_kl(gw[[xi]],gw[[xj]],readL=readlength,depth=depth)
+		hic = hic_kl(gw[[xi]],gw[[xj]],pix.size=hic_res,depth=depth)
+		return(data.table(longread = lr, hic=hic))
+		},mc.cores=mc.cores))
+	
+	gwcomp.dt = cbind(gwcomp.dt,dists)[,lr_phaseable := longread>kl_cutoff][,hic_phaseable:=hic>kl_cutoff]
+	lr_frac = sum(gwcomp.dt$lr_phaseable)/nrow(gwcomp.dt)
+	hic_frac = sum(gwcomp.dt$hic_phaseable)/nrow(gwcomp.dt)
+	if (return.all){return(list(lr_frac = lr_frac, hic_frac = hic_frac,all_dists = gwcomp.dt))}
+	else{return(list(lr_frac = lr_frac, hic_frac = hic_frac))}
+}

@@ -17,8 +17,8 @@ gg.to.wiring <- function(gg){
   nodesdt[is.na(loose.cn.right),loose.cn.right:=cn]
   nodesdt[is.na(loose.cn.left),loose.cn.left:=cn] #adjusting CN at chromosome ends
   # separate left and right loose ends and label them appropriately as edges going to node "0", before adding them to the total set of external edges
-  left.looseedges = copy(nodesdt)[loose.cn.left>0][,.(n2=snode.id,cn = loose.cn.left,n2.side='left',n1=0,n1.side='right')]
-  right.looseedges = copy(nodesdt)[loose.cn.right>0][,.(n1=snode.id,cn = loose.cn.right,n2.side='left',n2=0,n1.side='right')]
+  left.looseedges = data.table::copy(nodesdt)[loose.cn.left>0][,.(n2=snode.id,cn = loose.cn.left,n2.side='left',n1=0,n1.side='right')]
+  right.looseedges = data.table::copy(nodesdt)[loose.cn.right>0][,.(n1=snode.id,cn = loose.cn.right,n2.side='left',n2=0,n1.side='right')]
   external.edges = rbind(edgesdt,rbind(left.looseedges,right.looseedges)[,type:='LOO'][,.(cn,n1,n2,n1.side,n2.side,type)])
   #browser()
   dedup.edges = external.edges[rep(1:.N,cn)][,.(n1,n2,n1.side,n2.side,type)] #separate all copies of all edges
@@ -151,7 +151,7 @@ local.sampling = function(gg,nsteps,nwalk,onlyhash=F,starter_edges=NULL,return.e
   hashhist = c()
   permute.node = function(edges) {
 	pivot.node = sample(edges[cn>1]$n,1)
-	new_edges = copy(edges)
+	new_edges = data.table::copy(edges)
 	edges.to.permute = edges[n==pivot.node]$right
 	inds = sample(seq_along(edges.to.permute),2)
 	edges.to.permute[c(inds[1],inds[2])] <- edges.to.permute[c(inds[2],inds[1])]
@@ -194,7 +194,7 @@ markov.gwalk = function(gg,len,self.avoid = F,attempts = 10,return.gw=F){
   walkhist = list()
   permute.node = function(edges) {
 	pivot.node = sample(edges[cn>1]$n,1)
-	new_edges = copy(edges)
+	new_edges = data.table::copy(edges)
 	edges.to.permute = edges[n==pivot.node]$right
 	inds = sample(seq_along(edges.to.permute),2)
 	edges.to.permute[c(inds[1],inds[2])] <- edges.to.permute[c(inds[2],inds[1])]
@@ -449,7 +449,7 @@ reads_fromwalk = function(walk,readL,min.res = NULL){
 		grdt[,start:=end-widths+1]
 		grdt = grdt[,.(start,end,snode.id)]
 		maxlen = max(grdt$end)
-		lin_maxlen = copy(maxlen)
+		lin_maxlen = data.table::copy(maxlen)
 		if (walk$circular[i]){ #check if this is a circular walk
 			add.gr = data.table::copy(grdt)
 			add.gr = add.gr[start < readL][,start:=start+maxlen][,end:=min(end+maxlen+1,maxlen+readL)] #add at the end however much is equal to the hanging piece
@@ -477,7 +477,7 @@ reads_fromwalk = function(walk,readL,min.res = NULL){
 	return(unique(reads))
 }
 
-longread_kl <- function(walk_x, walk_y, graph=NULL,readL=1e4, depth = NULL, min.res=NULL, background = 1e-5,mc.cores=1) {
+longread_kl = function(walk_x, walk_y, graph=NULL,readL=1e4, depth = NULL, min.res=NULL, background = 1e-5,mc.cores=1) {
 	if (is.null(walk_x$graph)){
 		if(is.null(graph)){
 			error('Must provide either a gWalk object or a graph as input to function')
@@ -661,7 +661,7 @@ get_dists = function(gw,graph,pix.size=5e6,readL=1e6,edit_thresh=0,mc.cores=1){
 	if (!is.na(edit_thresh)){
 	message('Calculating edit distances')
 	edit_dists = unlist(pbmclapply(1:nrow(comppairs),function(x){
-		edit_dist(gw[[comppairs[x]$i]],gw[[comppairs[x]$j]],graph=graph,thresh=edit_thresh)
+		edit_dist_cpp(gw[[comppairs[x]$i]],gw[[comppairs[x]$j]],graph=graph,thresh=edit_thresh)
 				   },mc.cores=mc.cores))
 	comppairs[,edit:=edit_dists]
 	}

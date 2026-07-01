@@ -20,12 +20,12 @@ abc_from_tiles = function(enhancers, promoters, contact.gm ,enhancer_score_col =
   tp = gr.findoverlaps(tiles, promoters)
   T_P = sparseMatrix(i = tp$query.id,j = tp$subject.id,x = 1,dims = c(n_tiles, n_prom))
   # enhancer x promoter contact mass
-  EP_contact = t(T_E) %*% C %*% T_P
+  EP_contact = Matrix::t(T_E) %*% C %*% T_P
   # weight each enhancer by activity score
   enh_score = mcols(enhancers)[[enhancer_score_col]]
   EP_raw = EP_contact * enh_score
   # normalize within each promoter
-  denom = colSums(EP_raw) + eps
+  denom = Matrix::colSums(EP_raw) + eps
   EP_abc = sweep(as.matrix(EP_raw), 2, denom, "/")
   rownames(EP_abc) = seq_len(n_enh)
   colnames(EP_abc) = mcols(promoters)[[promoter_name_col]]

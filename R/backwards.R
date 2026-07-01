@@ -19,7 +19,9 @@ prep_data_for_py <- function(gg,gm,depth,pix.size=1e5,target_region=NULL,write.t
   dedup.nodes = nodesdt.split[rep(1:.N,cn)][,.(start,end,seqnames,node_id = node.id,side)][,unique.id:=.I]
 
   #Now we have to tile the target region which we are going to simulate and fit to data, making sure our tiles match up with edges of nodes
-  tiled.target = gr.merge(gr.tile(target_region,pix.size),dt2gr(nodesdt.split))[,c()]
+
+  #tiled.target = gr.merge(gr.tile(target_region,pix.size),dt2gr(nodesdt.split))[,c()]
+  tiled.target = gr.merge(gr.tile(target_region,pix.size),dt2gr(nodesdt.split[cn>0]))[,c()]
 
   #we want to consider every "copy" of every tile uniquely
   dedup.tiles = gr2dt(gr.merge(tiled.target,dt2gr(dedup.nodes)))[,tile.id:=query.id]

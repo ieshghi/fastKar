@@ -117,7 +117,7 @@ simulate_walks <- function(walks,tiled.target,widthdt,if.comps=F,mc.cores=1,if.s
     },mc.cores=mc.cores)
     #
     reference.intrachr = mclapply(1:length(walk.dts),function(ii){
-        this.dt = copy(walk.dts[[ii]]) 
+        this.dt = data.table::copy(walk.dts[[ii]]) 
         this.dt[,end:=cumsum(width)] #end coordinates along the allele are just the sum of widths
         this.dt[,start:=end - width + 1] #start coordinates are the ends minus widths
         this.dt[,mid:=(start+end)/2]
@@ -134,7 +134,7 @@ simulate_walks <- function(walks,tiled.target,widthdt,if.comps=F,mc.cores=1,if.s
             tsparse.ref = as(refmat,'TsparseMatrix')
             dt.ref = data.table(i=tsparse.ref@i+1,j=tsparse.ref@j+1,value=tsparse.ref@x)[i<=j]# change to long format, Tsparsematrix is 0-indexed
             setkeyv(dt.ref,c('i','j'))
-            intra.contacts = copy(target.dat)[dt.ref,on=.(i,j),value:=walk.cn[ii]*i.value] #join with the template hi-c map. Also multiply contacts by copy-number of the walk
+            intra.contacts = data.table::copy(target.dat)[dt.ref,on=.(i,j),value:=walk.cn[ii]*i.value] #join with the template hi-c map. Also multiply contacts by copy-number of the walk
         }else{
             intra.contacts = data.table::copy(target.dat[,.(i,j,id,value,widthprod)])
         }
@@ -223,7 +223,7 @@ eval_comps <- function(tiled.walk,comps.gr=NULL){
 #' @param if.comps boolean, whether or not to consider compartments (defaults to FALSE)
 #' @return single data.table corresponding to the total contacts in the target region including both intra- and inter-chromosomal contacts
 calculate_interchrom <- function(intra.dts,walk.dts,tiled.target,walk.cn,if.comps=F,mc.cores=1,if.fast=T){
-    target.dt = copy(tiled.target)[,.(orig.id=tile.id,cn,compartment)]
+    target.dt = data.table::copy(tiled.target)[,.(orig.id=tile.id,cn,compartment)]
     template = data.table::copy(intra.dts[[1]])
     if (if.comps){
         lookup_interchr = fastKar::small_lookup[d<0]
