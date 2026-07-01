@@ -242,7 +242,7 @@ identifiable = function(graph,M = 20,kl_cutoff = 10,sim_depth = 10,readlength = 
 	gw = sample.gwalks(event.gg,M,verbose=F)
 	gwcomp.dt = data.table(expand.grid(1:length(gw),1:length(gw)))[,.(i=Var1,j=Var2)][j>i][,comp.id:=.I] #all the pairs of walks to compare
 	
-	dists = rbindlist(pblapply(gwcomp.dt$comp.id,function(x){
+	dists = rbindlist(pbmclapply(gwcomp.dt$comp.id,function(x){
 		xi = gwcomp.dt[x]$i
 		xj = gwcomp.dt[x]$j
 		lr = longread_kl(gw[[xi]],gw[[xj]],readL=readlength,depth=depth)
