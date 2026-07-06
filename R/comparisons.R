@@ -256,3 +256,33 @@ identifiable = function(graph,M = 20,kl_cutoff = 10,sim_depth = 10,readlength = 
 	if (return.all){return(list(lr_frac = lr_frac, hic_frac = hic_frac,all_dists = gwcomp.dt))}
 	else{return(list(lr_frac = lr_frac, hic_frac = hic_frac))}
 }
+
+#similar to above, but for each sample we only compare to nearest neighbors using markov sampling
+neighbor_separable = function(gg,n_init,n_neighbor,kl_cutoff=10,hic_resolution=NULL,hic_depth=10,footprint=NULL,mc.cores=1,return.all=F){
+	if (!is.null(footprint)){gg = loosefix(gg %&% footprint)
+	}else{footprint = gg$footprint}
+	if (is.null(hic_resolution)){
+		w = sum(width(footprint))
+		hic_resolution = 1e3*round(w/1e5) #about 100 bins across the footprint,rounded off to the nearest kb
+	}
+	message('Sampling nearest neighbors')
+	neighbors = mclapply(1:n_init,function(i){local.sampling(gg,nsteps=2,nwalk=n_neighbor)},mc.cores=mc.cores)
+	init_gw = lapply(neighbors,function(gwl){lapply(gwl,function(gwi){gW(graph=gg,snode.id=gwi[[1]]$snode.id,circular=gwi[[1]]$circular)})})
+	neighbors_gw = lapply(neighbors,function(gwl){lapply(gwl,function(gwi){gW(graph=gg,snode.id=gwi[[2]]$snode.id,circular=gwi[[2]]$circular)})})
+	message('Calculating KL divergences')
+	comppairs = data.table(expand.grid(seq_along(init_gw),1:n_neighbor))[,.(init.id=Var1,neighbor.id=Var2)]
+	kldiv = mclapply(1:nrow(comppairs),function(x){
+		i = comppairs[x]$init.id
+		j = comppairs[x]$neighbor.id
+		gw1 = init_gw[[i]][[1]]
+		gw2 = neighbors_gw[[i]][[j]]
+		if (gw1$hash==gw2$hash){return(0)}
+		hic_kl(gw1,gw2,pix.size=hic_resolution,depth=hic_depth,theta=2)
+	},mc.cores=mc.cores)
+	comppairs$kldiv = unlist(kldiv)
+	comppairs[,identifiable:=kldiv > kl_cutoff]
+	idenfrac = sum(comppairs$identifiable)/sum(comppairs$kldiv > 0)
+	if (is.na(idenfrac)){return(NA)}
+	if (return.all){return(list(sample.comps = comppairs,identifiable = idenfrac))}
+	return(idenfrac)
+}

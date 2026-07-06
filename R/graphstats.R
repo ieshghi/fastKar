@@ -140,7 +140,7 @@ sample.gwalks = function(gg,N=1,mc.cores=1,chunksize = 1e3,return.gw=T,remove.du
   }
 }
 
-local.sampling = function(gg,nsteps,nwalk,onlyhash=F,starter_edges=NULL,return.edges=F){
+local.sampling = function(gg,nsteps,nwalk,onlyhash=F,starter_edges=NULL,return.edges=F,return.gw=F){
   wiring = gg.to.wiring(gg)
   if (is.null(starter_edges)){
   	internal.edges = wiring$internal.edges
@@ -158,7 +158,6 @@ local.sampling = function(gg,nsteps,nwalk,onlyhash=F,starter_edges=NULL,return.e
   	new_edges[n==pivot.node,right:=edges.to.permute]
 	return(new_edges)
   }
-
   gw0 = traverse_graph_cpp(internal.edges,loose.ends)
   gw0$hash = hash_snodelist(gw0$snode.id,gw0$circular)
   walkhist = lapply(1:nwalk,function(i){list(gw0)}) #initialize nwalk walkers at the same point
@@ -236,11 +235,10 @@ markov.gwalk = function(gg,len,self.avoid = F,attempts = 10,return.gw=F){
   }else{return(walkhist)}
 }
 
-multi.markov = function(gg,N,len,self.avoid=T,attempts=10,mc.cores=1,return.gw=F){
-	chains = mclapply(1:N,function(i){
+multi.markov = function(gg,N,len,self.avoid=F,attempts=10,mc.cores=1,return.gw=F){
+	mclapply(1:N,function(i){
 		markov.gwalk(gg=gg,len=len,self.avoid=self.avoid,attempts=attempts,return.gw=return.gw)  
   },mc.cores=mc.cores)
-	return(chains)
 }
 
 booth_rotate = function(x) { #an implementation of Booth's algorithm to disambiguate circular walk hashes. See https://en.wikipedia.org/wiki/Lexicographically_minimal_string_rotation
