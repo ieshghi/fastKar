@@ -689,3 +689,188 @@ get_all_pair_distances = function(gw,depth,pix.size,mc.cores=1){
 			hic_kl(gw[[comppairs[x]$i]],gw[[comppairs[x]$j]],pix.size=pix.size,depth=depth,theta=2)
 				   },mc.cores=mc.cores))
 	return(hic_dists)}
+
+
+library(data.table)
+
+paste_loose_ends <- function(gg,seed=NULL){
+    work = gr2dt(gg$loose)[cn>0 & terminal==F][,row:=.I][,.(strand,node.cn,cn,index,node.id,orientation,row)]
+
+    leftover = work[0,]
+    leftover[, unpaired.cn := integer()]
+
+    if (sum(work$cn) %% 2 == 1) {
+        if (!is.null(seed))
+            set.seed(seed)
+        ## Weighted by CN = uniform sampling over loose-end copies.
+        k = sample.int(nrow(work),1,prob = work$cn)
+        leftover = work[k]
+        leftover[,unpaired.cn:=1]
+        work[k, cn := cn - 1]
+        work = work[cn > 0]
+    }
+    #helper functions
+    canonical = function(r) {sort(as.integer(r[r > 0]))}
+    state_key = function(r) {paste0("s:", paste(r, collapse = ","))}
+    lower_bound = function(r) {(length(r) + 1L) %/% 2L}## One junction type can remove at most two active ends.
+    greedy_upper_bound = function(r) {
+        r = canonical(r)
+        n.used = 0
+        if (sum(r) %% 2 != 0)stop("Internal error: residual CN sum is odd.")
+        while (length(r) >= 2) {
+            ## Best easy case: completely paste two equal CNs.
+            duplicated.cn = unique(r[duplicated(r)])
+            if (length(duplicated.cn)) {
+                v = max(duplicated.cn)
+                ii = which(r == v)[1:2]
+                r = r[-ii]
+            } else {
+                ## Otherwise completely consume the smallest end
+                ## against the largest.
+                r[length(r)] = r[length(r)] - r[1]
+                r = canonical(r[-1])
+            }
+            n.used = n.used + 1L
+        }
+        ## The final residual, if present, must be even and can
+        ## be absorbed by one fold-back.
+        if (length(r) == 1L) {
+            if (r[1L] %% 2L != 0L)
+                stop("Internal error: odd residual CN.")
+            n.used = n.used + 1L
+        }
+        n.used
+    }
+    make_moves = function(r) {
+	    r = canonical(r)
+	    if (!length(r))
+	        return(list())
+	    n = length(r)
+	    ## Always choose the largest residual-CN end.
+	    i = n
+	    ri = r[i]
+	    moves = list()
+	    seen = new.env(hash = TRUE, parent = emptyenv())
+	    ## Add a move unless another move has already produced
+	    ## the same canonical child state.
+	    push_move = function(j, w, foldback, child) {
+	        child = canonical(child)
+	        key = state_key(child)
+	        if (exists(key, envir = seen, inherits = FALSE)){return(NULL)}
+	        assign(key, TRUE, envir = seen)
+	        list(i = i,j = j,w = as.integer(w),foldback = foldback,child = child)
+	    }
+	    if (n >= 2L) {
+	        ## Only one representative partner is needed for each
+	        ## distinct residual CN.
+	        partner.cn = unique(r[seq_len(n - 1L)])
+	        for (v in partner.cn) {
+	            j = which(r == v)[1L]
+	            ## Since i is the maximum residual CN:
+	            ## min(ri, v) == v.
+	            for (w in seq_len(v)) {
+	                child = r
+	                child[i] = child[i] - w
+	                child[j] = child[j] - w
+	                move = push_move(j = j,w = w,foldback = FALSE,child = child)
+	                if (!is.null(move)){moves[[length(moves) + 1L]] = move}
+	            }
+	        }
+	    }
+	    if (ri >= 2L) {
+	        for (w in seq_len(ri %/% 2L)) {
+	            child = r
+	            child[i] = child[i] - 2L * w
+	            move = push_move(j = i,w = w,foldback = TRUE,child = child)
+	            if (!is.null(move)){moves[[length(moves) + 1L]] = move}
+	        }
+	    }
+	    if (!length(moves)){stop("Internal error: no moves from state ",paste(r, collapse = ",")," (sum = ", sum(r), ")")}
+	    score = unlist(lapply(moves,function(a){1L + greedy_upper_bound(a$child)}))
+	    active = unlist(lapply(moves,function(a){length(a$child)}))
+	    moves[order(score, active)]
+	}
+        memo <- new.env(hash = TRUE, parent = emptyenv())
+	cost.memo = new.env(hash = TRUE,parent = emptyenv())
+	move.memo <- new.env(hash = TRUE,parent = emptyenv())
+	solve_cost <- function(r) {
+	    r <- canonical(r)
+	    if (!length(r)){return(0)}
+	    if (sum(r) %% 2 != 0)stop("Internal error: odd residual state ",paste(r, collapse = ","))
+	    key = state_key(r)
+	    if (exists(key,envir = cost.memo,inherits = FALSE)) {
+	        return(get(key,envir = cost.memo,inherits = FALSE))
+	    }
+	    ## A single active end is necessarily handled by
+	    ## one fold-back.
+	    if (length(r) == 1L) {
+	        stopifnot(r[1L] %% 2L == 0L)
+	        move <- list(i = 1L,j = 1L,w = r[1L] %/% 2L,foldback = TRUE,child = integer())
+	        assign(key,1L,envir = cost.memo)
+	        assign(key,move,envir = move.memo)
+	        return(1L)
+	    }
+	    lb = lower_bound(r)
+	    best = Inf
+	    best.move = NULL
+	    for (move in make_moves(r)) {
+	        ## Once we have a feasible incumbent, prune states
+	        ## that cannot possibly improve it.
+	        if (is.finite(best) && 1 + lower_bound(move$child) >= best) {next}
+	        cost = 1 + solve_cost(move$child)
+	        if (cost < best) {
+	            best = cost
+	            best.move = move
+	            ## The theoretical lower bound has been reached.
+	            if (best == lb){break}
+	        }
+	    }
+	    if (is.null(best.move))stop("Internal error: failed to solve state ",paste(r, collapse = ","))
+	    best = as.integer(best)
+	    assign(key,best,envir = cost.memo)
+	    assign(key,best.move,envir = move.memo)
+	    best
+	}
+    initial.state = canonical(work$cn)
+    optimal.cost = solve_cost(initial.state)
+    residual = work$cn
+    moves = vector("list", optimal.cost)
+    for (step in seq_len(optimal.cost)){
+	active = which(residual>0)
+	active = active[order(residual[active],active)]
+	r = residual[active]
+	chosen = get(state_key(r),envir=move.memo)
+	ii = active[chosen$i]
+	jj = active[chosen$j]
+	if (ii==jj){
+		residual[ii] = residual[ii]-2*chosen$w
+	}else{
+		residual[ii] = residual[ii]-chosen$w
+		residual[jj] = residual[jj]-chosen$w
+	}
+	aa = min(ii,jj)
+	bb = max(ii,jj)
+	moves[[step]] = data.table(i=work$row[aa],j=work$row[bb],
+		loose1=work$index[aa],loose2=work$index[bb],
+		cn=chosen$w,foldback=aa==bb)
+    }
+    if (any(residual != 0L)){stop("Internal error: reconstruction left residual CN.")}
+    junctions = if (length(moves)) {rbindlist(moves)
+    } else {
+        data.table(i = integer(),j = integer(),loose1 = work$index[0],loose2 = work$index[0],cn = integer(),foldback = logical())
+    }
+    repeated = junctions[,.N,by = .(i, j)][N > 1L]
+    if (nrow(repeated)){stop("Internal error: reconstruction repeated a junction pair.")}
+    #list(junctions = junctions,leftover = leftover,n.unique.junctions = nrow(junctions),n.states = length(ls(memo, all.names = TRUE)))
+    newgg = gg$copy
+    loosedt = gr2dt(gg$loose)[cn>0 & terminal==F][,row:=.I][,.(row,node.id,orientation,cn)]
+    newedges = junctions[,.(cn,
+	n1=loosedt$node.id[i],
+	n2=loosedt$node.id[j],
+	n1.side=loosedt$orientation[i],
+	n2.side=loosedt$orientation[j],
+	type='ALT')]
+    newgg = gG(nodes=gg$nodes$gr,edges=rbind(gg$edges$dt,newedges,fill=T))
+    newgg = loosefix(newgg)
+    return(newgg)
+}
