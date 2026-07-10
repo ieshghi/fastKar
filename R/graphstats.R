@@ -872,5 +872,6 @@ paste_loose_ends <- function(gg,seed=NULL){
 	type='ALT')]
     newgg = gG(nodes=gg$nodes$gr,edges=rbind(gg$edges$dt,newedges,fill=T))
     newgg = loosefix(newgg)
+    newgg$set(y.field = "cn")
     return(newgg)
 }
