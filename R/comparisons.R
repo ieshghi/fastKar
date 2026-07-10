@@ -240,7 +240,7 @@ identifiable = function(graph,M = 20,kl_cutoff = 10,sim_depth = 10,readlength = 
 		hic_res = 1e3*round(10**(log10(sum(width(event.gg$footprint)))-2.5)/1e3) #about 300 bins across the footprint,rounded off to the nearest kb
 		}
 	gw = sample.gwalks(event.gg,M,verbose=F)
-	gwcomp.dt = data.table(expand.grid(1:length(gw),1:length(gw)))[,.(i=Var1,j=Var2)][j>i][,comp.id:=.I] #all the pairs of walks to compare
+	gwcomp.dt = CJ(i=1:length(gw),j=1:length(gw))[j>i][,comp.id:=.I]#all the pairs of walks to compare
 	
 	dists = rbindlist(mclapply(gwcomp.dt$comp.id,function(x){
 		xi = gwcomp.dt[x]$i
@@ -270,7 +270,7 @@ neighbor_separable = function(gg,n_init,n_neighbor,kl_cutoff=10,hic_resolution=N
 	init_gw = lapply(neighbors,function(gwl){lapply(gwl,function(gwi){gW(graph=gg,snode.id=gwi[[1]]$snode.id,circular=gwi[[1]]$circular)})})
 	neighbors_gw = lapply(neighbors,function(gwl){lapply(gwl,function(gwi){gW(graph=gg,snode.id=gwi[[2]]$snode.id,circular=gwi[[2]]$circular)})})
 	message('Calculating KL divergences')
-	comppairs = data.table(expand.grid(seq_along(init_gw),1:n_neighbor))[,.(init.id=Var1,neighbor.id=Var2)]
+	comppairs = CJ(init.id = seq_along(init_gw),neighbor.id = 1:n_neighbor)
 	kldiv = mclapply(1:nrow(comppairs),function(x){
 		i = comppairs[x]$init.id
 		j = comppairs[x]$neighbor.id
@@ -285,4 +285,28 @@ neighbor_separable = function(gg,n_init,n_neighbor,kl_cutoff=10,hic_resolution=N
 	if (is.na(idenfrac)){return(NA)}
 	if (return.all){return(list(sample.comps = comppairs,identifiable = idenfrac))}
 	return(idenfrac)
+}
+
+group_klcomp = function(gw1, gw2=NULL,target_region = NULL, hic_resolution = NULL,depth=10,mc.cores=1){
+	if (is.null(target_region)){ft = gw1[[1]]$footprint
+	}else{ft = target_region}
+	symm=F
+	if (is.null(gw2)){
+		gw2=gw1
+		symm=T
+	} #compare among selves
+	if (is.null(hic_resolution)){
+		w = sum(width(ft))
+		hic_resolution = 1e3*round(w/1e5) #about 100 bins across the footprint,rounded off to the nearest kb
+	}
+	comppairs = CJ(i=seq_along(gw1),j=seq_along(gw2))
+	if (symm){comppairs = comppairs[j>i]}
+	kldiv = mclapply(1:nrow(comppairs),function(x){
+		i = comppairs[x]$i
+		j = comppairs[x]$j
+		if (gw1[[i]]$hash==gw2[[j]]$hash){return(0)}
+		hic_kl(gw1[[i]],gw2[[j]],target_region = target_region,pix.size=hic_resolution,depth=depth,theta=2)
+	},mc.cores=mc.cores)
+	comppairs$kldiv = unlist(kldiv)
+	return(comppairs)
 }

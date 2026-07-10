@@ -2,8 +2,6 @@
 #' @importFrom Rcpp sourceCpp
 NULL
 
-#TODO for all inference methods: make some hashing method so that user can look at all the sampled walk sets and their respective NLLs
-
 #goes from a ggraph to a "wiring", which gives all the internal edges of the graph (going from left side of a node to right side)
 #along with the loose node ids and a reference data table with the new node ids (all copies of each node are de-duplicated)
 gg.to.wiring <- function(gg){ 
@@ -35,7 +33,6 @@ gg.to.wiring <- function(gg){
 }
 
 #sample gWalks from graph gg, take N samples and return all unique permutations among them
-
 #' @import pbmcapply
 #' @import digest
 sample.gwalks = function(gg,N=1,mc.cores=1,chunksize = 1e3,return.gw=T,remove.dups=T,verbose=T,onlyhash=F,keep.circular=T,
@@ -508,7 +505,7 @@ longread_kl = function(walk_x, walk_y, graph=NULL,readL=1e4, depth = NULL, min.r
 	}
 }
 
-hic_kl = function(walk_x, walk_y, graph=NULL,pix.size=1e6, depth = 1,theta=2) {
+hic_kl = function(walk_x, walk_y, target_region=NULL, graph=NULL,pix.size=1e6, depth = 1,theta=2) {
 	if (is.null(walk_x$graph)){
 		if(is.null(graph)){
 			error('Must provide either a gWalk object or a graph as input to function')
@@ -518,8 +515,9 @@ hic_kl = function(walk_x, walk_y, graph=NULL,pix.size=1e6, depth = 1,theta=2) {
 	}else{
 		graph = walk_x$graph
 	}
-	hic_x = forward_simulate(walk_x,target_region = graph$footprint,pix.size=pix.size,depth=depth)
-	hic_y = forward_simulate(walk_y,target_region = graph$footprint,pix.size=pix.size,depth=depth)
+	if (is.null(target_region)){target_region=graph$footprint}
+	hic_x = forward_simulate(walk_x,target_region = target_region,pix.size=pix.size,depth=depth)
+	hic_y = forward_simulate(walk_y,target_region = target_region,pix.size=pix.size,depth=depth)
 	kl = compmaps(hic_x,hic_y,theta=theta,return_kl=T,area0=pix.size^2,ifsum=T)
 	#kl = kl_nb(hic_x$value,hic_y$value,r=theta)
 	return(kl)
@@ -636,7 +634,7 @@ edit_dist = function(gwx,gwy,graph=NULL,thresh=0,return_all = F){
 	}
 	n = max(n,m)
 
-	comppairs = data.table(expand.grid(1:n,1:n))[,.(i=Var1,j=Var2)]
+	comppairs = CJ(i=1:n,j=1:n)
 	costs = -unlist(lapply(1:nrow(comppairs),function(x){alignscore_compl(sn_x[[comppairs[x]$i]],sn_y[[comppairs[x]$j]],gap_penalties)}))
 	comppairs[,cost:=costs]
 	costmat = data.matrix(tidyr::pivot_wider(comppairs,names_from=j,values_from=cost)[,-1])
@@ -649,7 +647,7 @@ edit_dist = function(gwx,gwy,graph=NULL,thresh=0,return_all = F){
 #just a wrapper function to calculate all distance pairs
 #if you want to skip calculating Hi-C (or long-read) distances, set pix.size=0 (or readL=0). To avoid edit distances, set edit_thresh=NA
 get_dists = function(gw,graph,pix.size=5e6,readL=1e6,edit_thresh=0,mc.cores=1){
-	comppairs = data.table(expand.grid(1:length(gw),1:length(gw)))[,.(i=Var1,j=Var2)][i>j]
+	comppairs = CJ(i=seq_along(gw),j=seq_along(gw))[i>j]
 	if (pix.size>0){
 	message('Calculating Hi-C distances')
 	hic_dists = unlist(pbmclapply(1:nrow(comppairs),function(x){
@@ -686,7 +684,7 @@ function(fpgg,N=1000,mc.cores=1){
                             }
 
 get_all_pair_distances = function(gw,depth,pix.size,mc.cores=1){
-	comppairs = data.table(expand.grid(1:length(gw),1:length(gw)))[,.(i=Var1,j=Var2)][i>j]
+	comppairs = CJ(i=seq_along(gw),j=seq_along(gw))[i>j]
 	hic_dists = unlist(pbmclapply(1:nrow(comppairs),function(x){
 			hic_kl(gw[[comppairs[x]$i]],gw[[comppairs[x]$j]],pix.size=pix.size,depth=depth,theta=2)
 				   },mc.cores=mc.cores))

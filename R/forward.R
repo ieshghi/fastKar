@@ -263,7 +263,7 @@ make_template_dat <- function(target.bins,if.comps=FALSE){
         widths = target.bins$width
         l = nrow(target.bins)
     }
-    template.dat = data.table(expand.grid(i=1:l,j=1:l))[j>=i][,value:=0]
+    template.dat = CJ(i=1:l,j=1:l)[j>=i][,value:=0]
     setkeyv(template.dat,c('i','j'))
     if(if.comps){
         target.bins[is.na(target.bins$compartment)]$compartment='A'
