@@ -4,7 +4,7 @@ NULL
 
 #goes from a ggraph to a "wiring", which gives all the internal edges of the graph (going from left side of a node to right side)
 #along with the loose node ids and a reference data table with the new node ids (all copies of each node are de-duplicated)
-gg.to.wiring <- function(gg){ 
+gg.to.wiring = function(gg){ 
   if(!(('loose.cn.left' %in% colnames(gg$nodes$dt)) & ('loose.cn.right' %in% colnames(gg$nodes$dt)))){
   	gg = loosefix(gg)
   }
@@ -35,39 +35,26 @@ gg.to.wiring <- function(gg){
 #sample gWalks from graph gg, take N samples and return all unique permutations among them
 #' @import pbmcapply
 #' @import digest
-sample.gwalks = function(gg,N=1,mc.cores=1,chunksize = 1e3,return.gw=T,remove.dups=T,verbose=T,onlyhash=F,keep.circular=T,
-                         legacy = FALSE){
-  # legacy = FALSE (default): use traverse_graph_v2_batch_cpp for traversal and
-  #   hash_karyotype_cpp for the post-traversal dedup. Same equivalence relation
-  #   as legacy = TRUE (verified by partition match across the bench battery),
-  #   typically 20-200x faster end-to-end depending on graph size.
-  # legacy = TRUE: original code path (traverse_graph_cpp + hash_snodelist).
+sample.gwalks = function(gg,N=1,mc.cores=1,chunksize = 1e3,return.gw=T,remove.dups=T,verbose=T,onlyhash=F,keep.circular=T,frozen.nodes = NULL){
   wiring = gg.to.wiring(gg)
   internal.edges = wiring$internal.edges
   loose.ends = wiring$loose.ends
 
-  hash_fn <- if (legacy) hash_snodelist else hash_karyotype_cpp
+  hash_fn  =  hash_karyotype_cpp
 
   if(verbose){
   message('Sampling permutations')
   }
-
-  if (legacy) {
-    shuffle_edges <- function(edges) {
-      new_right <- edges[, if (.N > 1) sample(right, .N) else right, by = n]$V1
+  n_groups   <- split(seq_len(nrow(internal.edges)), internal.edges$n)
+  n_vals = as.integer(names(n_groups))
+  right_vec0 <- internal.edges$right
+  shuffle_edges <- function(edges) {
+    out <- right_vec0
+    for (i in 1:length(n_groups)){
+            g = n_groups[[i]]
+            if (length(g) > 1 & !(n_vals[i] %in% frozen.nodes)) out[g] <- sample(out[g])
     }
-  } else {
-    # Pre-compute per-node row groups once; a plain R loop over groups bypasses
-    # the data.table by-group dispatch (which was ~270us per call at V=44,
-    # vs ~25us for this loop on the same input). Uses R's sample() so seeds
-    # produce identical permutations to the legacy path.
-    n_groups   <- split(seq_len(nrow(internal.edges)), internal.edges$n)
-    right_vec0 <- internal.edges$right
-    shuffle_edges <- function(edges) {
-      out <- right_vec0
-      for (g in n_groups) if (length(g) > 1) out[g] <- sample(out[g])
-      out
-    }
+    out
   }
   shuffle_chunk <- function(K, edges) {
     replicate(K, shuffle_edges(edges), simplify = FALSE)
@@ -99,11 +86,7 @@ sample.gwalks = function(gg,N=1,mc.cores=1,chunksize = 1e3,return.gw=T,remove.du
   	message('Generating walks')
   }
   makewalk_chunk <- function(permchunk) {
-    if (legacy) {
-      ws = lapply(permchunk,function(p){traverse_graph_cpp(internal.edges[,right:=p],loose.ends)})
-    } else {
-      ws = traverse_graph_v2_batch_cpp(internal.edges, permchunk, loose.ends)
-    }
+    ws = traverse_graph_v2_batch_cpp(internal.edges, permchunk, loose.ends)
     if (return.gw){
       ws = lapply(ws,function(w){gW(graph=gg,snode.id=w$snode.id,circular=w$circular)})
     }
@@ -137,10 +120,15 @@ sample.gwalks = function(gg,N=1,mc.cores=1,chunksize = 1e3,return.gw=T,remove.du
   }
 }
 
+#samples karyotype space using markov chains always starting at the same walk, initialized randomly. 
 local.sampling = function(gg,nsteps,nwalk,onlyhash=F,starter_edges=NULL,return.edges=F,return.gw=F){
   wiring = gg.to.wiring(gg)
+  shuffle_edges = function(edges) {
+        new_right = edges[, if (.N > 1) sample(right, .N) else right, by = n]$V1
+  	return(edges[,right:=new_right])
+  }
   if (is.null(starter_edges)){
-  	internal.edges = wiring$internal.edges
+  	internal.edges = shuffle_edges(wiring$internal.edges)
   } else {
 	internal.edges = starter_edges
   }
@@ -181,8 +169,10 @@ local.sampling = function(gg,nsteps,nwalk,onlyhash=F,starter_edges=NULL,return.e
   }
 }
 
-
-markov.gwalk = function(gg,len,self.avoid = F,attempts = 10,return.gw=F){
+#starts a markov chain at a random location and samples for a given length
+markov.gwalk = function(gg,len,self.avoid = F,attempts = 10,return.gw=F,seed=NULL){
+  if (is.null(seed)){set.seed(sample(1:1e5,1))
+  } else{set.seed(seed)}
   wiring = gg.to.wiring(gg)
   internal.edges = wiring$internal.edges
   loose.ends = wiring$loose.ends
@@ -197,8 +187,11 @@ markov.gwalk = function(gg,len,self.avoid = F,attempts = 10,return.gw=F){
   	new_edges[n==pivot.node,right:=edges.to.permute]
 	return(new_edges)
   }
-
-  gw0 = traverse_graph_cpp(internal.edges,loose.ends)
+  shuffle_edges = function(edges) {
+        new_right = edges[, if (.N > 1) sample(right, .N) else right, by = n]$V1
+  	return(edges[,right:=new_right])
+  }
+  gw0 = traverse_graph_cpp(shuffle_edges(internal.edges),loose.ends)
   gw0$hash = hash_snodelist(gw0$snode.id,gw0$circular)
   walkhist[[1]] = gw0
   hashhist = c(hashhist,gw0$hash)
@@ -232,9 +225,13 @@ markov.gwalk = function(gg,len,self.avoid = F,attempts = 10,return.gw=F){
   }else{return(walkhist)}
 }
 
-multi.markov = function(gg,N,len,self.avoid=F,attempts=10,mc.cores=1,return.gw=F){
+#runs markov.gwalk in parallel starting at random locations. different from local.sampling because that function starts all markov chains at the same location!
+multi.markov = function(gg,N,len,self.avoid=F,attempts=10,mc.cores=1,return.gw=F,seed=NULL){
+	if (is.null(seed)){set.seed(sample(1:1e5,1))
+	}else{set.seed(seed)}
+	seeds = sample(1:1e5,N)
 	mclapply(1:N,function(i){
-		markov.gwalk(gg=gg,len=len,self.avoid=self.avoid,attempts=attempts,return.gw=return.gw)  
+		markov.gwalk(gg=gg,len=len,self.avoid=self.avoid,attempts=attempts,return.gw=return.gw,seed=seeds[i])  
   },mc.cores=mc.cores)
 }
 
