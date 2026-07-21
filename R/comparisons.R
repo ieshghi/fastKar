@@ -31,6 +31,74 @@ f1score_comparemaps <- function(null_map,hyp_map,theta=2,significance = 0.05,ret
   }
 }
 
+all_gwalk_lr = function(longreads, gwa, gwb, readL, depth){
+	longreads_aswords = unlist(lapply(longreads,function(r){paste0(r,collapse='|')}))
+	pq = longread_probdist(gwa,gwb,readL)
+	p_a = pq$p
+	p_b = pq$q
+
+	loglikratio = sum(log(p_a[longreads_aswords]) - log(p_b[longreads_aswords]))
+	if (loglikratio > 0){
+		called_gw = gwa
+	}else if (loglikratio < 0){
+		called_gw = gwb
+	}else{
+		called_gw = sample(list(gwa,gwb))
+	}
+	simdata = liktest_separable_lr(gwa,gwb,readL=readL,depth=depth)
+	return(list(called_gw = called_gw, loglikratio = loglikratio, sim_error_rate = simdata$error_rate, gwa_llr = simdata$gwa_ratios, gwb_llr = simdata$gwb_ratios))
+}
+
+longread_probdist = function(gwa,gwb,readL,background=1e-10){
+	reads_a = reads_fromwalk(gwa,readL)
+	reads_b = reads_fromwalk(gwb,readL)
+	all_words = union(reads_a$words,reads_b$words)
+	c1 = setNames(reads_a$nums, reads_a$words)[all_words]
+	c2 = setNames(reads_b$nums, reads_b$words)[all_words]
+	names(c1) = all_words
+	names(c2) = all_words
+	c1[is.na(c1)] <- 0
+	c2[is.na(c2)] <- 0
+	p = (c1 + background) / (sum(c1) + background * length(all_words))
+	q = (c2 + background) / (sum(c2) + background * length(all_words))
+	return(list(p=p,q=q))
+}
+
+liktest_separable_lr = function(gwa,gwb,readL,depth=1,nsamp = 20,mc.cores=1,background=1e-10,return.kl = F,return.all=F){
+	context = sum(width(gwa$graph$footprint)) + 2*readL 
+	covperread = readL/context	
+	N = depth/covperread
+
+	pq = longread_probdist(gwa,gwb,readL,background=background)
+	p = pq$p
+	q = pq$q
+
+	if(return.kl){return(N*sum(p*log(p/q)))}
+
+	p_samples = lapply(1:nsamp,function(x){sample(names(p),size = N,prob=p,replace=T)})
+	q_samples = lapply(1:nsamp,function(x){sample(names(q),size = N,prob=q,replace=T)})
+
+	loglikratio = function(sample){sum(log(p[sample]) - log(q[sample]))}
+
+	p_ratios = unlist(lapply(p_samples,loglikratio))
+	q_ratios = unlist(lapply(q_samples,loglikratio))
+	error_rate = (sum(p_ratios <= 0) + sum(q_ratios >= 0)) / (2*nsamp)
+	if (return.all){return(list(error_rate = error_rate, gwa_ratios = p_ratios, gwb_ratios = q_ratios))}
+	return(error_rate)
+}
+
+liktest_separable = function(map_a,map_b,theta=2,nsamp = 20,mc.cores=1,error.thresh = NULL){
+	a_samples = make_noisydat(map_a,nsamp=nsamp,theta=theta)
+	b_samples = make_noisydat(map_b,nsamp=nsamp,theta=theta)
+	#compmaps is the negative log likelihood
+	loglikratio = function(sample){-compdats(sample,map_a$dat)+compdats(sample,map_b$dat)}
+
+	a_ratios = unlist(mclapply(a_samples,loglikratio,mc.cores=mc.cores))
+	b_ratios = unlist(mclapply(b_samples,loglikratio,mc.cores=mc.cores))
+	error_rate = (sum(a_ratios < 0) + sum(b_ratios > 0)) / (2*nsamp)
+	return(error_rate)
+}
+
 kl_nb <- function(mu1, mu2, r=2,tinyval=1e-10,ifsum=T) { #get KL divergence between two sets of negative binomials
   mu1 <- as.numeric(pmax(mu1,tinyval))
   mu2 <- as.numeric(pmax(mu2,tinyval))
@@ -42,16 +110,6 @@ kl_nb <- function(mu1, mu2, r=2,tinyval=1e-10,ifsum=T) { #get KL divergence betw
   }else{
 	return(kl)
   }
-}
-
-klsymm_nb <- function(mu1, mu2, r=2,tinyval=1e-10) { #get KL divergence between two sets of negative binomials
-  mu1 <- as.numeric(pmax(mu1,tinyval))
-  mu2 <- as.numeric(pmax(mu2,tinyval))
-  stopifnot(length(mu1) == length(mu2))
-  
-  kl <- (mu1-mu2)*log((mu1/mu2)*((r+mu2)/(r+mu1)))
-  kl[kl<0] = 0
-  return(sum(kl))
 }
 
 test.walks.with.hic <- function(walkset,hic.data,resolution=1e5,mc.cores=1,depth.est=1,target_region=NULL,if.diag=TRUE,return='scores',mask=NULL){
@@ -86,14 +144,6 @@ test.walks.with.hic <- function(walkset,hic.data,resolution=1e5,mc.cores=1,depth
 }
 
 compmaps <- function(map_exp,map_theory,theta=2,ifsum=F,if.diag=T,ifscale=F,mask=NULL,return_kl=F,area0=NULL){ 
-    if (!is.null(mask)){
-        gr = map_theory$gr %&% mask
-        bad.inds = gr$tile.id
-        trudat = map_theory$dat
-        trudat[i %in% bad.inds,value:=0]
-        trudat[j %in% bad.inds,value:=0]
-        map_theory = gM(gr=map_theory$gr,dat=trudat)
-    }
    if (is.null(area0)){
 	gr = map_theory$gr
         medianwid = median(width(gr))
@@ -106,6 +156,10 @@ compmaps <- function(map_exp,map_theory,theta=2,ifsum=F,if.diag=T,ifscale=F,mask
    dat_exp[is.na(value),value:=0]
    dat_theory[is.na(value),value:=0]
    comp_dat = compdats(dat_exp,dat_theory,theta,ifsum=FALSE,if.diag=if.diag,return_kl=return_kl,area0=area0)
+   if (!is.null(mask)){
+       bad.inds = (map_exp$gr %&% mask)$tile.id
+       comp_dat[(i %in% bad.inds) & (j %in% bad.inds),value:=0]
+   }
    if (ifsum){
        return(sum(comp_dat$value))
    }else{
@@ -130,6 +184,8 @@ estimate.depthratio <- function(filepath,mode='hic',res=1e6,ploidy=2,if.chr=FALS
 
 #returns negative log likelihood of test data given true data
 compdats <- function(dat_test,dat_true,theta=2,ifsum=TRUE,if.diag=TRUE,return_kl=F,area0=1e8){
+    setkey(dat_test,'id')
+    setkey(dat_true,'id')
     if (is.null(dat_test$widthprod)){
         dat_test$widthprod= area0 #if the data.table doesn't have an area column, assume all pixels are the same size
     }
@@ -159,27 +215,24 @@ compdats <- function(dat_test,dat_true,theta=2,ifsum=TRUE,if.diag=TRUE,return_kl
     }
 }
 
-make_noisymap <- function(map_in,theta=0,num.copies=1,mc.cores=20){
-    dats = make_noisydat(map_in,num.copies,theta)
+make_noisymap <- function(map_in,nsamp=1,theta=2,mc.cores=1){
+    dats = make_noisydat(map_in,nsamp,theta)
     out.maps = mclapply(dats,function(i){gM(gr=map_in$gr,dat=i)},mc.cores=mc.cores)
     return(out.maps)
 }
 
-make_noisydat <- function(map_in,num.copies=1,theta=0,backlambda = 0){ #samples from negative binomial distribution, unless theta=0 then uses poisson
+make_noisydat <- function(map_in,nsamp=1,theta=2){ #samples from negative binomial distribution, unless theta=0 then uses poisson
     mapdat = map_in$dat
     template = make_template_dat(map_in$gr)
     mapdat = merge.data.table(template[,.(i,j,widthprod,id)],mapdat[,.(i,j,value)],all.x=TRUE,by=c('i','j'))
     meanvals = mapdat$value
     if (theta==0){
-        newval = rpois(length(meanvals)*num.copies,rep(meanvals,num.copies))
+        newval = rpois(length(meanvals)*nsamp,rep(meanvals,nsamp))
     }else {
-        newval = rnbinom(length(meanvals)*num.copies,size=theta,mu=rep(meanvals,num.copies))
+        newval = rnbinom(length(meanvals)*nsamp,size=theta,mu=rep(meanvals,nsamp))
     }
-    if (backlambda > 0){
-        newval = newval + rpois(length(newval),backlambda)
-    }
-    multimap = do.call(rbind,rep(list(mapdat),num.copies))
-    multimap$map.ids = lapply(1:num.copies,function(i){rep(i,nrow(mapdat))}) %>% unlist
+    multimap = do.call(rbind,rep(list(mapdat),nsamp))
+    multimap$map.ids = lapply(1:nsamp,function(i){rep(i,nrow(mapdat))}) %>% unlist
     multimap$value = newval
     out.dats = split(multimap,by='map.ids')
     #out.gms = lapply(out.dats,function(i){gM(gr=map_in$gr,dat=i)})
@@ -233,28 +286,6 @@ callloops = function(hic,gw,depth,fdr_cut = 0.01,resolution = NULL,sim.dat = NUL
 		ppdf(qq_pval(compdat$nbinom_p,exp=simulated$nbinom_p,max.x=10,max.y=10),qqplot_path,width=5,height=4) 
 	}
 	return(outlier.gm)
-}
-
-identifiable = function(graph,M = 20,kl_cutoff = 10,sim_depth = 10,readlength = 1e5,hic_res = NULL,mc.cores=1,return.all=F){
-	if (is.null(hic_res)){
-		hic_res = 1e3*round(10**(log10(sum(width(event.gg$footprint)))-2.5)/1e3) #about 300 bins across the footprint,rounded off to the nearest kb
-		}
-	gw = sample.gwalks(event.gg,M,verbose=F)
-	gwcomp.dt = CJ(i=1:length(gw),j=1:length(gw))[j>i][,comp.id:=.I]#all the pairs of walks to compare
-	
-	dists = rbindlist(mclapply(gwcomp.dt$comp.id,function(x){
-		xi = gwcomp.dt[x]$i
-		xj = gwcomp.dt[x]$j
-		lr = longread_kl(gw[[xi]],gw[[xj]],readL=readlength,depth=depth)
-		hic = hic_kl(gw[[xi]],gw[[xj]],pix.size=hic_res,depth=depth)
-		return(data.table(longread = lr, hic=hic))
-		},mc.cores=mc.cores))
-	
-	gwcomp.dt = cbind(gwcomp.dt,dists)[,lr_phaseable := longread>kl_cutoff][,hic_phaseable:=hic>kl_cutoff]
-	lr_frac = sum(gwcomp.dt$lr_phaseable)/nrow(gwcomp.dt)
-	hic_frac = sum(gwcomp.dt$hic_phaseable)/nrow(gwcomp.dt)
-	if (return.all){return(list(lr_frac = lr_frac, hic_frac = hic_frac,all_dists = gwcomp.dt))}
-	else{return(list(lr_frac = lr_frac, hic_frac = hic_frac))}
 }
 
 #similar to above, but for each sample we only compare to nearest neighbors using markov sampling

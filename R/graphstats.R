@@ -423,53 +423,50 @@ to_gwalk = function(walklist,gr,mc.cores=1){
 	return(gW(grl=grl,circular=walklist$circular[keep])$disjoin())
 }
 
-reads_fromwalk = function(walk,readL,min.res = NULL){
+reads_fromwalk = function(walk,readL){
 	gr = walk$graph$gr[,c('node.id')]
 	reads = do.call('rbind',lapply(1:length(walk$snode.id),function(i){
 		snodes = walk$snode.id[[i]]
 		widths = width(gr[abs(snodes)])
-		if (!is.null(min.res)){
-			keep = widths >= min.res
-			snodes = snodes[keep]
-			widths = widths[keep]
-			if (sum(keep)==0){
-				return(NULL)
-			}
-		}
 		grdt = data.table(snode.id=snodes)
 		grdt[,end:=cumsum(widths)]
 		grdt[,start:=end-widths+1]
-		grdt = grdt[,.(start,end,snode.id)]
-		maxlen = max(grdt$end)
-		lin_maxlen = data.table::copy(maxlen)
+    		domain_lo = min(grdt$start) - readL + 1
+    		domain_hi = max(grdt$end)
 		if (walk$circular[i]){ #check if this is a circular walk
 			add.gr = data.table::copy(grdt)
-			add.gr = add.gr[start < readL][,start:=start+maxlen][,end:=min(end+maxlen+1,maxlen+readL)] #add at the end however much is equal to the hanging piece
+			add.gr = add.gr[start < readL][,start:=start+domain_hi][,end:=min(end+domain_hi+1,domain_hi+readL)] #add at the end however much is equal to the hanging piece
 			add.gr = add.gr[end>start]
 			grdt = rbind(grdt,add.gr) #add at the end however much is equal to the hanging piece
-			maxlen = max(grdt$end)
+			domain_hi = max(grdt$end)
 		}
-		breakpts = c(grdt$start)
-		reads = rbind(data.table(start = breakpts)[,end:=start+readL],data.table(end=breakpts)[,start:=end-readL])[,.(start,end)]
-		reads[end>maxlen,end:=maxlen]
-		reads[start<=0,start:=1]
-		reads = unique(reads[end>start & start <= lin_maxlen])
-		setkeyv(reads,c('start','end'))
-		reads[,num:=diff(c(start,lin_maxlen+1))][,id:=.I]
-		setkeyv(reads,c('start','end'))
-		setkeyv(grdt,c('start','end'))
-		ovdt = foverlaps(x=reads[,.(start,end,num,id)],y=grdt[,.(start,end,snode.id)],by.x=c('start','end'),by.y=c('start','end'),type='any',nomatch=0L)[,copy:=1:.N,by=id]
-		nodeid_list = ovdt[, .(snode.id = list(snode.id)), by = id][order(id), snode.id]
-		nums = ovdt[copy==1]$num
-		nodeid_list = c(nodeid_list,lapply(nodeid_list,function(n){-rev(n)}))
-		nodeid_list = sapply(nodeid_list,paste,collapse='')
-		return(data.table(words=nodeid_list,nums=rep(nums,2)))
-	}))
-	reads[,nums:=sum(nums),by=words]
-	return(unique(reads))
+    		setorder(grdt, start, end)
+    		grdt[, node_order := .I]
+    		cuts = sort(unique(c(domain_lo,domain_hi + 1,grdt$start -readL + 1, grdt$end + 1)))
+    		cuts = cuts[cuts >= domain_lo & cuts <= domain_hi + 1]
+    		# Each row represents an interval of starts with an identical overlap word.
+    		bins = data.table(read_start = head(cuts, -1),next_start = tail(cuts, -1))
+    		bins = bins[read_start < next_start]
+    		bins[, `:=`(bin_id = .I,start_max = next_start - 1,multiplicity = next_start - read_start,read_end = read_start + readL - 1)]
+    		# Find all nodes overlapped by the representative read from each bin.
+    		nodes = grdt[, .(start,end,snode.id,node_order)]
+    		setkey(nodes, start, end)
+    		hits = foverlaps(x = bins,y = nodes, by.x = c("read_start", "read_end"),by.y = c("start", "end"),type = "any",nomatch = 0L)
+    		setorder(hits, bin_id, node_order)
+    		reads_by_bin = hits[,.(read = list(snode.id),multiplicity = first(multiplicity)),by = bin_id]
+		rev_reads_by_bin = reads_by_bin[,.(bin_id,read=lapply(reads_by_bin$read,function(x){-rev(x)}),multiplicity)]
+		all_reads = rbind(reads_by_bin,rev_reads_by_bin)[,row:=.I]
+		readnames = unlist(lapply(all_reads$read,function(x){paste0(as.character(x),collapse='|')}))
+		all_reads$words = readnames
+    		out = all_reads[,.(nums = sum(multiplicity)),by = words]
+    		setorder(out, -nums, words)
+		out
+      }))
+      reads[,nums:=sum(nums),by=words]
+      return(unique(reads))
 }
 
-longread_kl = function(walk_x, walk_y, graph=NULL,readL=1e4, depth = NULL, min.res=NULL, background = 1e-5,mc.cores=1) {
+longread_kl = function(walk_x, walk_y, graph=NULL,readL=1e4, depth = 1, background = 1e-5,mc.cores=1) {
 	if (is.null(walk_x$graph)){
 		if(is.null(graph)){
 			error('Must provide either a gWalk object or a graph as input to function')
@@ -479,30 +476,10 @@ longread_kl = function(walk_x, walk_y, graph=NULL,readL=1e4, depth = NULL, min.r
 	}else{
 		graph = walk_x$graph
 	}
-	x_list = reads_fromwalk(walk_x,readL,min.res=min.res)
-	y_list = reads_fromwalk(walk_y,readL,min.res=min.res)
-	all_words = union(x_list$words,y_list$words)
-	c1 = setNames(x_list$nums, x_list$words)[all_words]
-	c2 = setNames(y_list$nums, y_list$words)[all_words]
-	c1[is.na(c1)] <- 0
-	c2[is.na(c2)] <- 0
-	p = (c1 + background) / (sum(c1) + background * length(all_words))
-	q = (c2 + background) / (sum(c2) + background * length(all_words))
-	#m = 0.5 * (p + q)
-	klval = sum(p*log(p/q))
-  	#KL = function(x, y) sum(x * log(x / y))
-  	#JS = 0.5 * KL(p, m) + 0.5 * KL(q, m)
-	if (is.null(depth)){
-		return(klval)
-	} else{
-		domain = walk_x$graph$footprint
-		covperread = min(readL/sum(width(domain)),1)
-		N = depth/covperread
-		return(N*klval)
-	}
+	liktest_separable_lr(walk_x,walk_y,readL=readL,depth=depth,background=background,mc.cores=mc.cores,return.kl=T)
 }
 
-hic_kl = function(walk_x, walk_y, target_region=NULL, graph=NULL,pix.size=1e6, depth = 1,theta=2) {
+hic_kl = function(walk_x, walk_y, target_region=NULL, graph=NULL,pix.size=1e6, depth = 1,theta=2,mask=NULL) {
 	if (is.null(walk_x$graph)){
 		if(is.null(graph)){
 			error('Must provide either a gWalk object or a graph as input to function')
@@ -515,7 +492,7 @@ hic_kl = function(walk_x, walk_y, target_region=NULL, graph=NULL,pix.size=1e6, d
 	if (is.null(target_region)){target_region=graph$footprint}
 	hic_x = forward_simulate(walk_x,target_region = target_region,pix.size=pix.size,depth=depth)
 	hic_y = forward_simulate(walk_y,target_region = target_region,pix.size=pix.size,depth=depth)
-	kl = compmaps(hic_x,hic_y,theta=theta,return_kl=T,area0=pix.size^2,ifsum=T)
+	kl = compmaps(hic_x,hic_y,theta=theta,return_kl=T,area0=pix.size^2,ifsum=T,mask=mask)
 	#kl = kl_nb(hic_x$value,hic_y$value,r=theta)
 	return(kl)
 }
@@ -690,6 +667,13 @@ get_all_pair_distances = function(gw,depth,pix.size,mc.cores=1){
 
 library(data.table)
 
+paste_loose_ends_timed = function(gg,seed=NULL,maxtime=NULL){
+	if (is.null(maxtime)){return(paste_loose_ends(gg,seed))}
+	result = tryCatch(
+	  R.utils::withTimeout({paste_loose_ends(gg,seed)},timeout = maxtime,onTimeout = "error"),
+	  TimeoutException = function(e) {return(gg)}
+	)
+}
 paste_loose_ends <- function(gg,seed=NULL){
     work = gr2dt(gg$loose)[cn>0 & terminal==F][,row:=.I][,.(strand,node.cn,cn,index,node.id,orientation,row)]
 
