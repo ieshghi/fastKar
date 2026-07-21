@@ -31,7 +31,7 @@ f1score_comparemaps <- function(null_map,hyp_map,theta=2,significance = 0.05,ret
   }
 }
 
-all_gwalk_lr = function(longreads, gwa, gwb, readL, depth){
+call_gwalk_longreads = function(longreads, gwa, gwb, readL, depth){
 	longreads_aswords = unlist(lapply(longreads,function(r){paste0(r,collapse='|')}))
 	pq = longread_probdist(gwa,gwb,readL)
 	p_a = pq$p
