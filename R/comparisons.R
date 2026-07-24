@@ -289,33 +289,50 @@ callloops = function(hic,gw,depth,fdr_cut = 0.01,resolution = NULL,sim.dat = NUL
 }
 
 #similar to above, but for each sample we only compare to nearest neighbors using markov sampling
-neighbor_separable = function(gg,n_init,n_neighbor,kl_cutoff=10,hic_resolution=NULL,hic_depth=10,footprint=NULL,mc.cores=1,return.all=F){
+#	resolution can be positive or negative. 
+#	If positive, it indicates a simulated Hi-C experiment of the given resolution. 
+#	If negative, it indicates a long-read experiment of the given read length
+#	If a list is input as "resolution", then output will be a list of the same shape
+neighbor_separable = function(gg,n_init,n_neighbor,sep_cutoff = 0.9,sep_samples = 20,resolution=NULL,depth=10,footprint=NULL,mc.cores=1){
 	if (!is.null(footprint)){gg = loosefix(gg %&% footprint)
 	}else{footprint = gg$footprint}
-	if (is.null(hic_resolution)){
-		w = sum(width(footprint))
-		hic_resolution = 1e3*round(w/1e5) #about 100 bins across the footprint,rounded off to the nearest kb
-	}
-	message('Sampling nearest neighbors')
+	out = rep(NA,length(resolution))
+	names(out) = ifelse(resolution>0,paste0('hic_',as.character(resolution)),paste0('lr_',as.character(abs(resolution))))
+	#sample n_init sets of walks. Each walk goes only 2 steps since we want nearest-neighbors, and we sample n_neighbor walks going from each starting point
 	neighbors = mclapply(1:n_init,function(i){local.sampling(gg,nsteps=2,nwalk=n_neighbor)},mc.cores=mc.cores)
+	#from all that sampling, grab the first step of every walk set as the init walk from that set
 	init_gw = lapply(neighbors,function(gwl){lapply(gwl,function(gwi){gW(graph=gg,snode.id=gwi[[1]]$snode.id,circular=gwi[[1]]$circular)})})
+	#now grab the second step of each of these as the nearest neighbor
 	neighbors_gw = lapply(neighbors,function(gwl){lapply(gwl,function(gwi){gW(graph=gg,snode.id=gwi[[2]]$snode.id,circular=gwi[[2]]$circular)})})
-	message('Calculating KL divergences')
+	#make a table of all the comparisons to be made between walks and their nearest neighbors
 	comppairs = CJ(init.id = seq_along(init_gw),neighbor.id = 1:n_neighbor)
-	kldiv = mclapply(1:nrow(comppairs),function(x){
+	#check which ones are identical (we sample allowing for overlaps) and throw out those samples
+	keep = lapply(1:nrow(comppairs),function(x){
+		gw1 = init_gw[[comppairs[x]$init.id]][[1]]
+		gw2 = neighbors_gw[[comppairs[x]$init.id]][[comppairs[x]$neighbor.id]]
+		gw1$hash!=gw2$hash}) %>% unlist
+	comppairs = comppairs[keep]
+	#if none are left then return NA, the analysis doesn't make sense in this case
+	if (nrow(comppairs)==0){return(out)}
+	#for the remaining pairs apply every requested distance metric
+	sepdata = mclapply(1:nrow(comppairs),function(x){
 		i = comppairs[x]$init.id
 		j = comppairs[x]$neighbor.id
 		gw1 = init_gw[[i]][[1]]
 		gw2 = neighbors_gw[[i]][[j]]
-		if (gw1$hash==gw2$hash){return(0)}
-		hic_kl(gw1,gw2,pix.size=hic_resolution,depth=hic_depth,theta=2)
-	},mc.cores=mc.cores)
-	comppairs$kldiv = unlist(kldiv)
-	comppairs[,identifiable:=kldiv > kl_cutoff]
-	idenfrac = sum(comppairs$identifiable)/sum(comppairs$kldiv > 0)
-	if (is.na(idenfrac)){return(NA)}
-	if (return.all){return(list(sample.comps = comppairs,identifiable = idenfrac))}
-	return(idenfrac)
+		outrow = lapply(1:length(resolution),function(y){
+			res = resolution[y]
+			if (res<0){1-liktest_separable_lr(gw1,gw2,readL=abs(res),depth=depth,nsamp=sep_samples)
+			}else if (res>0){
+				map_1 = forward_simulate(gw1,target_region=footprint,pix.size=res,depth=depth)
+				map_2 = forward_simulate(gw2,target_region=footprint,pix.size=res,depth=depth)
+				1 - liktest_separable(map_1,map_2,nsamp=sep_samples)
+			}
+		})
+		names(outrow) = names(out)
+		return(outrow)
+	},mc.cores=mc.cores) %>% rbindlist(use.names=T)
+	sepdata[, lapply(.SD, function(x) mean(x > sep_cutoff))]
 }
 
 group_klcomp = function(gw1, gw2=NULL,target_region = NULL, hic_resolution = NULL,depth=10,mc.cores=1){
@@ -340,4 +357,26 @@ group_klcomp = function(gw1, gw2=NULL,target_region = NULL, hic_resolution = NUL
 	},mc.cores=mc.cores)
 	comppairs$kldiv = unlist(kldiv)
 	return(comppairs)
+}
+
+#what is the minimal readlength required to tell the difference between two karyotypes?
+minimal_readlength = function(gw1,gw2){
+	if (gw1==gw2){return(NA)}
+	count_kmers = function(walks, k) {
+	  as.data.table(count_kmers_cpp(snode_ids = walks$snode.id,circular = walks$circular,k = as.integer(k)))}
+	maxl = max(c(gw1$dt$length,gw2$dt$length))
+	for (k in 3:maxl){
+		k1 = count_kmers(gw1,k) %>% setkey('kmer')
+		k2 = count_kmers(gw2,k) %>% setkey('kmer')
+		compk = merge.data.table(k1[,.(count,kmer)],k2[,.(count,kmer)],by='kmer',all=T)
+		compk[is.na(count.x),count.x:=0]
+		compk[is.na(count.y),count.y:=0]
+		diffk = compk[count.x!=count.y]
+		if (nrow(diffk)){break}
+	}
+	keepcols = c(paste0('node',c(2:(k-1))))
+	midnodes = unique(rbind(k1[diffk$kmer,nomatch=0],k2[diffk$kmer,nomatch=0]))[,..keepcols]
+	width_lookup = setNames(gw1$graph$nodes$dt$width, gw1$graph$nodes$dt$node.id)
+	midnodes[, width_sum := rowSums(matrix(width_lookup[as.character(abs(as.matrix(.SD)))],nrow = .N),na.rm = TRUE), .SDcols = keepcols]
+	return(min(midnodes$width_sum))
 }

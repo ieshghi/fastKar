@@ -5,6 +5,10 @@ compute_cost_matrix_cpp <- function(sn_x, sn_y, penalty) {
     .Call(`_fastKar_compute_cost_matrix_cpp`, sn_x, sn_y, penalty)
 }
 
+count_kmers_cpp <- function(snode_ids, circular, k) {
+    .Call(`_fastKar_count_kmers_cpp`, snode_ids, circular, k)
+}
+
 hash_karyotype_cpp <- function(snode_id, circular) {
     .Call(`_fastKar_hash_karyotype_cpp`, snode_id, circular)
 }

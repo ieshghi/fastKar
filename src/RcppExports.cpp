@@ -23,6 +23,19 @@ BEGIN_RCPP
     return rcpp_result_gen;
 END_RCPP
 }
+// count_kmers_cpp
+DataFrame count_kmers_cpp(List snode_ids, LogicalVector circular, int k);
+RcppExport SEXP _fastKar_count_kmers_cpp(SEXP snode_idsSEXP, SEXP circularSEXP, SEXP kSEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    Rcpp::traits::input_parameter< List >::type snode_ids(snode_idsSEXP);
+    Rcpp::traits::input_parameter< LogicalVector >::type circular(circularSEXP);
+    Rcpp::traits::input_parameter< int >::type k(kSEXP);
+    rcpp_result_gen = Rcpp::wrap(count_kmers_cpp(snode_ids, circular, k));
+    return rcpp_result_gen;
+END_RCPP
+}
 // hash_karyotype_cpp
 std::string hash_karyotype_cpp(List snode_id, LogicalVector circular);
 RcppExport SEXP _fastKar_hash_karyotype_cpp(SEXP snode_idSEXP, SEXP circularSEXP) {
@@ -75,6 +88,7 @@ END_RCPP
 
 static const R_CallMethodDef CallEntries[] = {
     {"_fastKar_compute_cost_matrix_cpp", (DL_FUNC) &_fastKar_compute_cost_matrix_cpp, 3},
+    {"_fastKar_count_kmers_cpp", (DL_FUNC) &_fastKar_count_kmers_cpp, 3},
     {"_fastKar_hash_karyotype_cpp", (DL_FUNC) &_fastKar_hash_karyotype_cpp, 2},
     {"_fastKar_traverse_graph_cpp", (DL_FUNC) &_fastKar_traverse_graph_cpp, 2},
     {"_fastKar_traverse_graph_v2_cpp", (DL_FUNC) &_fastKar_traverse_graph_v2_cpp, 2},

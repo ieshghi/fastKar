@@ -18,8 +18,7 @@ gg.to.wiring = function(gg){
   left.looseedges = data.table::copy(nodesdt)[loose.cn.left>0][,.(n2=snode.id,cn = loose.cn.left,n2.side='left',n1=0,n1.side='right')]
   right.looseedges = data.table::copy(nodesdt)[loose.cn.right>0][,.(n1=snode.id,cn = loose.cn.right,n2.side='left',n2=0,n1.side='right')]
   external.edges = rbind(edgesdt,rbind(left.looseedges,right.looseedges)[,type:='LOO'][,.(cn,n1,n2,n1.side,n2.side,type)])
-  #browser()
-  dedup.edges = external.edges[rep(1:.N,cn)][,.(n1,n2,n1.side,n2.side,type)] #separate all copies of all edges
+  dedup.edges = external.edges[cn>0][rep(1:.N,cn)][,.(n1,n2,n1.side,n2.side,type)] #separate all copies of all edges
   split.edgetable = melt.data.table(dedup.edges[,.(n1=paste0(n1,substr(n1.side,1,1)),n2=paste0(n2,substr(n2.side,1,1)),subid=.I,type)],id=c('subid','type'))[,.(subid,n=value,type)] #separate all edges and label them with a unique ID "subid"
   left.split.edgetable = split.edgetable[grepl('l',n)][,n:=as.integer(substr(n,1,nchar(n)-1))][n>0] %>% setkeyv('n') #setkey important so we have all left and right edges ordered appropriately.
   right.split.edgetable = split.edgetable[grepl('r',n)][,n:=as.integer(substr(n,1,nchar(n)-1))][n>0] %>% setkeyv('n')
@@ -135,6 +134,7 @@ local.sampling = function(gg,nsteps,nwalk,onlyhash=F,starter_edges=NULL,return.e
   loose.ends = wiring$loose.ends
   hashhist = c()
   permute.node = function(edges) {
+  	if (nrow(edges[cn>1])==0){return(edges)}
 	pivot.node = sample(edges[cn>1]$n,1)
 	new_edges = data.table::copy(edges)
 	edges.to.permute = edges[n==pivot.node]$right
@@ -431,23 +431,31 @@ reads_fromwalk = function(walk,readL){
 		grdt = data.table(snode.id=snodes)
 		grdt[,end:=cumsum(widths)]
 		grdt[,start:=end-widths+1]
-    		domain_lo = min(grdt$start) - readL + 1
-    		domain_hi = max(grdt$end)
-		if (walk$circular[i]){ #check if this is a circular walk
-			add.gr = data.table::copy(grdt)
-			add.gr = add.gr[start < readL][,start:=start+domain_hi][,end:=min(end+domain_hi+1,domain_hi+readL)] #add at the end however much is equal to the hanging piece
-			add.gr = add.gr[end>start]
-			grdt = rbind(grdt,add.gr) #add at the end however much is equal to the hanging piece
-			domain_hi = max(grdt$end)
+		total_length = max(grdt$end)
+		if (walk$circular[i]) {
+		    effective_readL = min(readL, total_length)
+		    domain_lo = 1
+		    domain_hi = total_length
+		    grdt[, wrap := 0]
+		    add.gr = copy(grdt)[,`:=`(start = start + total_length,end   = end   + total_length,wrap  = 1)]
+		    max_read_end = total_length + effective_readL - 1
+		    add.gr = add.gr[start <= max_read_end]
+		    add.gr[end > max_read_end, end := max_read_end]
+		    grdt <- rbindlist(list(grdt, add.gr),use.names = TRUE)
+		} else {
+		    effective_readL = readL
+		    domain_lo = min(grdt$start) - effective_readL + 1
+		    domain_hi = max(grdt$end)
+		    grdt[, wrap := 0]
 		}
     		setorder(grdt, start, end)
     		grdt[, node_order := .I]
-    		cuts = sort(unique(c(domain_lo,domain_hi + 1,grdt$start -readL + 1, grdt$end + 1)))
+    		cuts = sort(unique(c(domain_lo,domain_hi + 1,grdt$start -effective_readL + 1, grdt$end + 1)))
     		cuts = cuts[cuts >= domain_lo & cuts <= domain_hi + 1]
     		# Each row represents an interval of starts with an identical overlap word.
     		bins = data.table(read_start = head(cuts, -1),next_start = tail(cuts, -1))
     		bins = bins[read_start < next_start]
-    		bins[, `:=`(bin_id = .I,start_max = next_start - 1,multiplicity = next_start - read_start,read_end = read_start + readL - 1)]
+    		bins[, `:=`(bin_id = .I,start_max = next_start - 1,multiplicity = next_start - read_start,read_end = read_start + effective_readL - 1)]
     		# Find all nodes overlapped by the representative read from each bin.
     		nodes = grdt[, .(start,end,snode.id,node_order)]
     		setkey(nodes, start, end)
@@ -620,12 +628,13 @@ edit_dist = function(gwx,gwy,graph=NULL,thresh=0,return_all = F){
 
 #just a wrapper function to calculate all distance pairs
 #if you want to skip calculating Hi-C (or long-read) distances, set pix.size=0 (or readL=0). To avoid edit distances, set edit_thresh=NA
-get_dists = function(gw,graph,pix.size=5e6,readL=1e6,edit_thresh=0,mc.cores=1){
+get_dists = function(gw,graph=NULL,target_region=NULL,pix.size=0,readL=0,edit_thresh=NA,depth=1,mc.cores=1){
+	if (is.null(target_region)){target_region = gw[[1]]$footprint}
 	comppairs = CJ(i=seq_along(gw),j=seq_along(gw))[i>j]
 	if (pix.size>0){
 	message('Calculating Hi-C distances')
 	hic_dists = unlist(pbmclapply(1:nrow(comppairs),function(x){
-		hic_kl(gw[[comppairs[x]$i]],gw[[comppairs[x]$j]],graph=graph,pix.size=pix.size,depth=1,theta=2)},mc.cores=mc.cores))
+		hic_kl(gw[[comppairs[x]$i]],gw[[comppairs[x]$j]],graph=graph,pix.size=pix.size,depth=depth,theta=2,target_region=target_region)},mc.cores=mc.cores))
 	comppairs[,hic:=hic_dists]
 	}
 	if (!is.na(edit_thresh)){
@@ -638,7 +647,7 @@ get_dists = function(gw,graph,pix.size=5e6,readL=1e6,edit_thresh=0,mc.cores=1){
 	if (readL>0){
 	message('Calculating long-read distances')
 	lr_dists = unlist(pbmclapply(1:nrow(comppairs),function(x){
-		longread_kl(gw[[comppairs[x]$i]],gw[[comppairs[x]$j]],graph=graph,readL=readL,depth=1)
+		longread_kl(gw[[comppairs[x]$i]],gw[[comppairs[x]$j]],graph=graph,readL=readL,depth=depth)
 			   },mc.cores=mc.cores))
 	comppairs[,longread:=lr_dists]
 	}
@@ -646,16 +655,30 @@ get_dists = function(gw,graph,pix.size=5e6,readL=1e6,edit_thresh=0,mc.cores=1){
 }
 	
 # does something similar to walks() but only returns linear walks on a given graph by sampling and keeping only unique walks. Doesn't return linear walks that exist on no possible decomposition, unlike walks()
-get_all_lin_walks <-
-function(fpgg,N=1000,mc.cores=1){
-        walksets = sample.gwalks(fpgg,N,mc.cores=mc.cores,verbose=F)
-            has_circ = unlist(lapply(walksets,function(w){sum(w$circular)>0}))
-                walksets_lin = walksets[!has_circ]
-                    all_linwalks = do.call('c',walksets_lin)
-                        all_hashes = data.table(hash=unlist(lapply(1:length(all_linwalks),function(i){all_linwalks[i]$hash})))[,idx:=.I][,instance:=1:.N,by=hash]
-                            keep = all_hashes[instance==1]$idx
-                                return(all_linwalks[keep])
-                            }
+get_unique_walks = function(gg,N=1,mode = c('all','lin','circular'),frozen.nodes = NULL,mc.cores=1){
+        walksets = sample.gwalks(gg,N,mc.cores=mc.cores,frozen.nodes = frozen.nodes,verbose=F,return.gw=F)
+	snodeslist = unlist(mclapply(walksets,function(gw){gw$snode.id},mc.cores=mc.cores),recursive=F)
+	circlist = unlist(mclapply(walksets,function(gw){gw$circular},mc.cores=mc.cores))
+	if (mode=='lin'){
+		keep = circlist==F
+	}else if(mode=='circular'){
+		keep = circlist==T
+	}else{
+		keep = rep(T,length(circlist))
+	}
+	snodeslist = snodeslist[keep]
+	circlist = circlist[keep]
+	all_walks = gW(graph=gg,snode.id=snodeslist,circular=circlist)
+	if (mode=='lin'){
+		all_walks = all_walks[all_walks$dt$circular==F]
+	}else if(mode=='circular'){
+		all_walks = all_walks[all_walks$dt$circular==T]
+	}
+	hashvec = unlist(mclapply(1:length(circlist),function(x){hash_karyotype_cpp(snodeslist[x],circlist[x])},mc.cores=mc.cores))
+	#hashvec = unlist(lapply(1:length(all_walks),function(i){all_walks[i]$hash}))
+	all_hashes = data.table(hash=hashvec)[,idx:=.I][,instance:=1:.N,by=hash]
+	return(all_walks[all_hashes[instance==1]$idx])
+}
 
 get_all_pair_distances = function(gw,depth,pix.size,mc.cores=1){
 	comppairs = CJ(i=seq_along(gw),j=seq_along(gw))[i>j]
@@ -855,4 +878,85 @@ paste_loose_ends <- function(gg,seed=NULL){
     newgg = loosefix(newgg)
     newgg$set(y.field = "cn")
     return(newgg)
+}
+
+boil = function(gg,ft,N,k_return = 1,verbose=F,mc.cores=mc.cores){
+	if (is(ft,'character')){ft = streduce(parse.gr(ft))}
+	amplicon_nodes = (gg$nodes$gr %&% ft)$node.id %>% unique 
+	amplicon_context_nodes = (gg$nodes$gr %&% streduce(ft + 1e3))$node.id %>% unique 
+	freeze.nodes = gg$nodes$dt[!(node.id %in% amplicon_context_nodes)]$node.id #we don't want to freeze nodes directly adjacent to the amplicon, hence ft + 1e3
+	if(verbose){message('Sampling walks from graph')}
+	walks = get_unique_walks(gg,N,mode='circular',frozen.nodes = freeze.nodes,mc.cores=mc.cores) %&% ft
+	#get max CN of walks in the graph
+	if(verbose){message('Scoring walks')}
+	walknodes = walks$nodesdt[,.(walk.id,node.id=abs(snode.id),walk.iid)]
+	walknodes[,cn:=.N,by=c('node.id','walk.id')]
+	walknodes = merge.data.table(walknodes,gg$nodes$dt[,.(node.id,graph.cn=cn,width)],by=c('node.id'),all.x=T,cartesian=T)
+	walknodes[is.na(graph.cn),graph.cn:=0]
+	walknodes[,maxN:=graph.cn%/%cn]
+	walknodes[,max.walk.cn.nodes:=min(maxN),by=walk.id]
+	walknodes[,walk.cn:=max.walk.cn.nodes*cn]
+	walkedges = walks$edgesdt[,.(walk.id,edge.id=abs(sedge.id),walk.iid)]
+	walkedges[,cn:=.N,by=c('edge.id','walk.id')]
+	walkedges = merge.data.table(walkedges,gg$edges$dt[,.(edge.id,graph.cn=cn)],by=c('edge.id'),all.x=T,allow.cartesian=T)
+	walkedges[is.na(graph.cn),graph.cn:=0]
+	walkedges[,maxN:=graph.cn%/%cn]
+	walkedges[,max.walk.cn.edges:=min(maxN),by=walk.id]
+	walknodes = unique(merge.data.table(walknodes,walkedges[,.(walk.id,max.walk.cn.edges)],by='walk.id',all.x=T,allow.cartesian=T))
+	walknodes[,max.walk.cn:=min(max.walk.cn.nodes,max.walk.cn.edges),by='walk.id']
+	#what fraction of the amplicon does the walk account for
+	amplicon_weight = sum(gg$nodes$dt[amplicon_nodes]$cn * gg$nodes$dt[amplicon_nodes]$width)
+	walknodes[,ampfrac := max.walk.cn*sum(width*(node.id %in% amplicon_nodes)) / amplicon_weight,by=walk.id]
+	walkdt = unique(walknodes[,.(walk.id,ampfrac,score=max.walk.cn*ampfrac,max.walk.cn)])
+	#what is the entropy of the walk
+	#walknodes[,node.entropy := -max.walk.cn*cn/walk.cn*log(cn/walk.cn)]
+	#walknodes[,walk.entropy := sum(node.entropy),by=walk.id]
+	#score walks combining both these things.. entropy * amplicon fraction perhaps?
+	#NOTE: entropy calculation seems bad so far, so we use walk.cn * ampfrac as a score instead
+	ord = order(walkdt$score,decreasing=T)
+	sorted_walks = walks[walkdt[ord]$walk.id]
+	#make an ecDNA solution from the kth best walk
+	if(verbose){message(paste0('Genrating top-',k_return,' solutions'))}
+	k_solns = mclapply(1:k_return,function(k){
+		walk_to_peel = sorted_walks[k]
+		peel_cn=walkdt[ord[k]]$max.walk.cn
+		#calculate what the remaining node and edge CN in the graph will be
+		edges_sub = merge.data.table(unique(walk_to_peel$edgesdt[,.(edge.id=abs(sedge.id))][,.(edge.id,sub_cn = .N*peel_cn),by=edge.id])[,.(edge.id,sub_cn)],gg$edges$dt[,.(edge.id,graph.cn=cn)],by='edge.id')[,.(edge.id,remaining_cn=graph.cn-sub_cn)]
+		nodes_sub = merge.data.table(unique(walk_to_peel$nodesdt[,.(node.id=abs(snode.id))][,.(node.id,sub_cn = .N*peel_cn),by=node.id])[,.(node.id,sub_cn)],gg$nodes$dt[,.(node.id,graph.cn=cn)],by='node.id')[,.(node.id,remaining_cn=graph.cn-sub_cn)]
+		#instantiate new graph with updated CNs, then sample from it to get the final walks to concatenate to the walks
+		gg_out = gg$copy
+		gg_out$nodes[nodes_sub$node.id]$mark(cn = nodes_sub$remaining_cn)
+		gg_out$edges[edges_sub$edge.id]$mark(cn = edges_sub$remaining_cn)
+		gg_out = loosefix(gg_out[,cn>0])
+		remaining.walks = sample.gwalks(gg_out,1,verbose=F)[[1]]
+		nr = length(remaining.walks)
+		combined.gw = gW(graph=gg,snode.id=c(remaining.walks$snode.id,rep(walk_to_peel$snode.id,peel_cn)),circular=c(remaining.walks$circular,rep(T,peel_cn)))
+		return(combined.gw)
+	},mc.cores=mc.cores)
+	return(k_solns)
+}
+
+#calculate entropy of the given nodes as distributed in the given gwalk object
+amp.entropy = function(gw,amp.nodes){
+	amp_nodesdt = gw$nodesdt[,.(walk.id,node.id=abs(snode.id))][node.id %in% amp.nodes]
+	amp_nodesdt[,walk.amp := .N,by=walk.id]
+	amp_nodesdt[,ampfrac:=walk.amp/nrow(.SD)]
+	walk.dist = unique(amp_nodesdt[,.(walk.id,ampfrac)])
+	-sum(walk.dist$ampfrac*log(walk.dist$ampfrac))
+}
+
+squeeze = function(gg,ft,N,k_return=1,verbose=F,mc.cores=1){
+	amplicon_nodes = (gg$nodes$gr %&% ft)$node.id %>% unique 
+	amplicon_context_nodes = (gg$nodes$gr %&% streduce(ft + 1e3))$node.id %>% unique 
+	freeze.nodes = gg$nodes$dt[!(node.id %in% amplicon_context_nodes)]$node.id #we don't want to freeze nodes directly adjacent to the amplicon, hence ft + 1e3
+	if (verbose){message('Sampling walks from graph')}
+	gwl = sample.gwalks(gg,N,frozen.nodes = freeze.nodes,verbose=F,mc.cores=mc.cores)
+	if (verbose){message('Scoring walks')}
+	entropies = unlist(lapply(gwl,function(gw){amp.entropy(gw,amplicon_nodes)}))
+	top_walks = gwl[order(entropies)[1:k_return]]
+	if(verbose){message(paste0('Genrating top-',k_return,' solutions'))}
+	mclapply(top_walks,function(gw){
+			 if (sum(gw$circular)>0){embedloops(gw)
+			 }else{gw}
+			 },mc.cores=mc.cores)
 }
