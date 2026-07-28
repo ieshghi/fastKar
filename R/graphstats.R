@@ -144,7 +144,11 @@ local.sampling = function(gg,nsteps,nwalk,onlyhash=F,starter_edges=NULL,return.e
 	return(new_edges)
   }
   gw0 = traverse_graph_cpp(internal.edges,loose.ends)
-  gw0$hash = hash_snodelist(gw0$snode.id,gw0$circular)
+  if (return.gw){
+	gw0 = gW(graph=gg,snode.id=gw0$snode.id,circular=gw0$circular)
+  }else{
+  	gw0$hash = hash_karyotype_cpp(gw0$snode.id,gw0$circular)
+  }
   walkhist = lapply(1:nwalk,function(i){list(gw0)}) #initialize nwalk walkers at the same point
   hashhist = lapply(1:nwalk,function(i){gw0$hash}) #initialize hashes
   edges = lapply(1:nwalk,function(i){internal.edges}) #initialize edge table
@@ -152,9 +156,15 @@ local.sampling = function(gg,nsteps,nwalk,onlyhash=F,starter_edges=NULL,return.e
   for (j in seq_len(nsteps-1)){
 	newedges = permute.node(edges[[i]])	
 	newwalk = traverse_graph_cpp(newedges,loose.ends)
-	newhash = hash_snodelist(newwalk$snode.id,newwalk$circular)
+	if (return.gw){
+		newwalk = gW(graph=gg,snode.id=newwalk$snode.id,circular=newwalk$circular)
+		newhash = newwalk$hash
+	}
+	else{
+		newhash = hash_karyotype_cpp(newwalk$snode.id,newwalk$circular)
+		newwalk$hash = newhash
+	}
 	edges[[i]] = newedges
-	newwalk$hash = newhash
 	walkhist[[i]][[j+1]] = newwalk 
 	hashhist[[i]] = c(hashhist[[i]],newhash)	
   }}
@@ -169,6 +179,55 @@ local.sampling = function(gg,nsteps,nwalk,onlyhash=F,starter_edges=NULL,return.e
   }
 }
 
+#faster version of local.sampling for sampling the neighborhood of one walk. It only samples walks that are exactly one step away from the starting point
+sample.neighborhood = function(gg,n_neighbor,starter_edges=NULL,return.edges=F,return.gw=T,mc.cores=1){
+  wiring = gg.to.wiring(gg)
+  shuffle_edges = function(edges) {
+        new_right = edges[, if (.N > 1) sample(right, .N) else right, by = n]$V1
+  	return(edges[,right:=new_right])
+  }
+  if (is.null(starter_edges)){
+  	internal.edges = shuffle_edges(wiring$internal.edges)
+  } else {
+	internal.edges = starter_edges
+  }
+  loose.ends = wiring$loose.ends
+  hashhist = c()
+  permute.node = function(edges) {
+  	if (nrow(edges[cn>1])==0){return(edges)}
+	pivot.node = sample(edges[cn>1]$n,1)
+	new_edges = data.table::copy(edges)
+	edges.to.permute = edges[n==pivot.node]$right
+	inds = sample(seq_along(edges.to.permute),2)
+	edges.to.permute[c(inds[1],inds[2])] <- edges.to.permute[c(inds[2],inds[1])]
+  	new_edges[n==pivot.node,right:=edges.to.permute]
+	return(new_edges)
+  }
+  gw0 = traverse_graph_cpp(internal.edges,loose.ends)
+  if (return.gw){
+	gw0 = gW(graph=gg,snode.id=gw0$snode.id,circular=gw0$circular)
+  }else{
+  	gw0$hash = hash_karyotype_cpp(gw0$snode.id,gw0$circular)
+  }
+  new_perms = mclapply(1:n_neighbor,function(x){permute.node(copy(internal.edges))},mc.cores=mc.cores)
+  neighbor_walks = mclapply(new_perms,function(p){
+			newwalk = traverse_graph_cpp(p,loose.ends)
+			if (return.gw){
+				newwalk = gW(graph=gg,snode.id=newwalk$snode.id,circular=newwalk$circular)
+				newhash = newwalk$hash
+			}
+			else{
+				newhash = hash_karyotype_cpp(newwalk$snode.id,newwalk$circular)
+				newwalk$hash = newhash
+			}
+			return(newwalk)
+		},mc.cores=mc.cores)
+  if (return.edges){
+	return(list(orig_walk = gw0,neighbor_walks=neighbor_walks,starter_edges = internal.edges))
+  } else{
+	return(list(orig_walk = gw0,neighbor_walks=neighbor_walks))
+  }
+}
 #starts a markov chain at a random location and samples for a given length
 markov.gwalk = function(gg,len,self.avoid = F,attempts = 10,return.gw=F,seed=NULL){
   if (is.null(seed)){set.seed(sample(1:1e5,1))
@@ -917,6 +976,7 @@ boil = function(gg,ft,N,k_return = 1,verbose=F,mc.cores=mc.cores){
 	sorted_walks = walks[walkdt[ord]$walk.id]
 	#make an ecDNA solution from the kth best walk
 	if(verbose){message(paste0('Genrating top-',k_return,' solutions'))}
+	if (length(sorted_walks) < k_return){k_return = length(sorted_walks)}
 	k_solns = mclapply(1:k_return,function(k){
 		walk_to_peel = sorted_walks[k]
 		peel_cn=walkdt[ord[k]]$max.walk.cn
@@ -956,7 +1016,10 @@ squeeze = function(gg,ft,N,k_return=1,verbose=F,mc.cores=1){
 	top_walks = gwl[order(entropies)[1:k_return]]
 	if(verbose){message(paste0('Genrating top-',k_return,' solutions'))}
 	mclapply(top_walks,function(gw){
-			 if (sum(gw$circular)>0){embedloops(gw)
+			 if (sum((gw %&% ft)$circular)>0){
+				 tryCatch({embedloops(gw)
+				 }, error = function(msg){
+				 return(gw)})
 			 }else{gw}
 			 },mc.cores=mc.cores)
 }

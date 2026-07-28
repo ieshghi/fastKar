@@ -255,7 +255,7 @@ sum_matrices <- function(matrices){
 #' 
 #' @param target.bins either a GRanges, or a data.table. If DT, must have a column "width", giving the width of all the bins
 #' @return data.table with columns i,j,id,widthprod corresponding to all pairwise contacts, widthprod is the product of widths of tiles i and j
-make_template_dat <- function(target.bins,if.comps=FALSE){
+make_template_dat = function(target.bins,if.comps=FALSE){
     if(inherits(target.bins,'GRanges')){
         widths = width(target.bins) %>% as.numeric
         l = length(target.bins)

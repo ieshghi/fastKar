@@ -33,9 +33,9 @@ f1score_comparemaps <- function(null_map,hyp_map,theta=2,significance = 0.05,ret
 
 call_gwalk_longreads = function(longreads, gwa, gwb, readL, depth){
 	longreads_aswords = unlist(lapply(longreads,function(r){paste0(r,collapse='|')}))
-	pq = longread_probdist(gwa,gwb,readL)
-	p_a = pq$p
-	p_b = pq$q
+	pq = longread_probdist(list(gwa,gwb),readL)
+	p_a = pq[[1]]
+	p_b = pq[[2]]
 
 	loglikratio = sum(log(p_a[longreads_aswords]) - log(p_b[longreads_aswords]))
 	if (loglikratio > 0){
@@ -49,19 +49,16 @@ call_gwalk_longreads = function(longreads, gwa, gwb, readL, depth){
 	return(list(called_gw = called_gw, loglikratio = loglikratio, sim_error_rate = simdata$error_rate, gwa_llr = simdata$gwa_ratios, gwb_llr = simdata$gwb_ratios))
 }
 
-longread_probdist = function(gwa,gwb,readL,background=1e-10){
-	reads_a = reads_fromwalk(gwa,readL)
-	reads_b = reads_fromwalk(gwb,readL)
-	all_words = union(reads_a$words,reads_b$words)
-	c1 = setNames(reads_a$nums, reads_a$words)[all_words]
-	c2 = setNames(reads_b$nums, reads_b$words)[all_words]
-	names(c1) = all_words
-	names(c2) = all_words
-	c1[is.na(c1)] <- 0
-	c2[is.na(c2)] <- 0
-	p = (c1 + background) / (sum(c1) + background * length(all_words))
-	q = (c2 + background) / (sum(c2) + background * length(all_words))
-	return(list(p=p,q=q))
+longread_probdist = function(gwlist,readL,background=1e-10,mc.cores=1){
+	if (is(gwlist,'gWalk')){gwlist = list(gwlist)}
+	reads_list = mclapply(gwlist,function(x){reads_fromwalk(x,readL)},mc.cores=mc.cores)
+	all_words = do.call('union',lapply(reads_list,function(x){x$words}))
+	mclapply(reads_list,function(x){
+			c = setNames(x$nums,x$words)[all_words]
+			names(c) = all_words
+			c[is.na(c)] = 0
+			return((c + background)/(sum(x) + background * length(all_words)))
+		   },mc.cores=mc.cores)
 }
 
 liktest_separable_lr = function(gwa,gwb,readL,depth=1,nsamp = 20,mc.cores=1,background=1e-10,return.kl = F,return.all=F){
@@ -69,9 +66,9 @@ liktest_separable_lr = function(gwa,gwb,readL,depth=1,nsamp = 20,mc.cores=1,back
 	covperread = readL/context	
 	N = depth/covperread
 
-	pq = longread_probdist(gwa,gwb,readL,background=background)
-	p = pq$p
-	q = pq$q
+	pq = longread_probdist(list(gwa,gwb),readL,background=background)
+	p = pq[[1]]
+	q = pq[[2]]
 
 	if(return.kl){return(N*sum(p*log(p/q)))}
 
@@ -221,7 +218,7 @@ make_noisymap <- function(map_in,nsamp=1,theta=2,mc.cores=1){
     return(out.maps)
 }
 
-make_noisydat <- function(map_in,nsamp=1,theta=2){ #samples from negative binomial distribution, unless theta=0 then uses poisson
+make_noisydat = function(map_in,nsamp=1,theta=2){ #samples from negative binomial distribution, unless theta=0 then uses poisson
     mapdat = map_in$dat
     template = make_template_dat(map_in$gr)
     mapdat = merge.data.table(template[,.(i,j,widthprod,id)],mapdat[,.(i,j,value)],all.x=TRUE,by=c('i','j'))
