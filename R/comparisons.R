@@ -52,12 +52,13 @@ call_gwalk_longreads = function(longreads, gwa, gwb, readL, depth){
 longread_probdist = function(gwlist,readL,background=1e-10,mc.cores=1){
 	if (is(gwlist,'gWalk')){gwlist = list(gwlist)}
 	reads_list = mclapply(gwlist,function(x){reads_fromwalk(x,readL)},mc.cores=mc.cores)
-	all_words = do.call('union',lapply(reads_list,function(x){x$words}))
+	wordlist = lapply(reads_list,function(x){x$words})
+	all_words = unique(unname(unlist(wordlist)))#do.call('union',lapply(reads_list,function(x){x$words}))
 	mclapply(reads_list,function(x){
-			c = setNames(x$nums,x$words)[all_words]
-			names(c) = all_words
-			c[is.na(c)] = 0
-			return((c + background)/(sum(x) + background * length(all_words)))
+			cx = setNames(x$nums,x$words)[all_words]
+			names(cx) = all_words
+			cx[is.na(cx)] = 0
+			return((cx + background)/(sum(cx) + background * length(all_words)))
 		   },mc.cores=mc.cores)
 }
 
