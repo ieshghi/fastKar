@@ -482,8 +482,9 @@ to_gwalk = function(walklist,gr,mc.cores=1){
 	return(gW(grl=grl,circular=walklist$circular[keep])$disjoin())
 }
 
-reads_fromwalk = function(walk,readL){
+reads_fromwalk = function(walk,readL,minsize=0){
 	gr = walk$graph$gr[,c('node.id')]
+	tinynodes = gr[width(gr) < minsize]$node.id
 	reads = do.call('rbind',lapply(1:length(walk$snode.id),function(i){
 		snodes = walk$snode.id[[i]]
 		widths = width(gr[abs(snodes)])
@@ -523,7 +524,10 @@ reads_fromwalk = function(walk,readL){
     		reads_by_bin = hits[,.(read = list(snode.id),multiplicity = first(multiplicity)),by = bin_id]
 		rev_reads_by_bin = reads_by_bin[,.(bin_id,read=lapply(reads_by_bin$read,function(x){-rev(x)}),multiplicity)]
 		all_reads = rbind(reads_by_bin,rev_reads_by_bin)[,row:=.I]
-		readnames = unlist(lapply(all_reads$read,function(x){paste0(as.character(x),collapse='|')}))
+		readnames = unlist(lapply(all_reads$read,function(x){
+						  x = x[!(abs(x) %in% tinynodes)]
+						  paste0(as.character(x),collapse='|')
+						}))
 		all_reads$words = readnames
     		out = all_reads[,.(nums = sum(multiplicity)),by = words]
     		setorder(out, -nums, words)

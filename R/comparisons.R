@@ -49,9 +49,9 @@ call_gwalk_longreads = function(longreads, gwa, gwb, readL, depth){
 	return(list(called_gw = called_gw, loglikratio = loglikratio, sim_error_rate = simdata$error_rate, gwa_llr = simdata$gwa_ratios, gwb_llr = simdata$gwb_ratios))
 }
 
-longread_probdist = function(gwlist,readL,background=1e-10,mc.cores=1){
+longread_probdist = function(gwlist,readL,minsize=0,background=1e-10,mc.cores=1){
 	if (is(gwlist,'gWalk')){gwlist = list(gwlist)}
-	reads_list = mclapply(gwlist,function(x){reads_fromwalk(x,readL)},mc.cores=mc.cores)
+	reads_list = mclapply(gwlist,function(x){reads_fromwalk(x,readL,minsize=minsize)},mc.cores=mc.cores)
 	wordlist = lapply(reads_list,function(x){x$words})
 	all_words = unique(unname(unlist(wordlist)))#do.call('union',lapply(reads_list,function(x){x$words}))
 	mclapply(reads_list,function(x){
