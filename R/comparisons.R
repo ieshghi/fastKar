@@ -49,17 +49,48 @@ call_gwalk_longreads = function(longreads, gwa, gwb, readL, depth){
 	return(list(called_gw = called_gw, loglikratio = loglikratio, sim_error_rate = simdata$error_rate, gwa_llr = simdata$gwa_ratios, gwb_llr = simdata$gwb_ratios))
 }
 
-longread_probdist = function(gwlist,readL,minsize=0,background=1e-10,mc.cores=1){
+longread_probdist = function(gwlist,readL,minsize=0,background=1e-10,mc.cores=1,obs_words=NULL){
 	if (is(gwlist,'gWalk')){gwlist = list(gwlist)}
 	reads_list = mclapply(gwlist,function(x){reads_fromwalk(x,readL,minsize=minsize)},mc.cores=mc.cores)
 	wordlist = lapply(reads_list,function(x){x$words})
 	all_words = unique(unname(unlist(wordlist)))#do.call('union',lapply(reads_list,function(x){x$words}))
+	# add any observed words to list of all words, so that they are included in the prob dist
+	if (!is.null(obs_words)) {
+		all_words = union(all_words, obs_words)
+	}
 	mclapply(reads_list,function(x){
 			cx = setNames(x$nums,x$words)[all_words]
 			names(cx) = all_words
 			cx[is.na(cx)] = 0
 			return((cx + background)/(sum(cx) + background * length(all_words)))
 		   },mc.cores=mc.cores)
+}
+
+readdist_probdist = function(gwlist,readL_vec,bins=10,minsize=0,background=1e-10,mc.cores=1,obs_words=NULL){
+	log.rl <- log(readL_vec)
+	log.rl.bins <- cut(log.rl, breaks = bins, labels = FALSE)
+	log.rl.bins.dist <- table(log.rl.bins) / length(log.rl)
+	bins.avg.rl <- tapply(readL_vec, log.rl.bins, mean)
+	bins.lrpdist <- lapply(seq_along(bins.avg.rl),function(i){
+		longread_probdist(gwlist,round(bins.avg.rl[i]),minsize=minsize,background=background,mc.cores=mc.cores,obs_words=obs_words)
+	})
+	# now combine probs across bins, scaled by frac of reads per bin, and adding zero prob for words not seen in a given bin
+	prob_list <- lapply(seq_along(gwlist),function(x){
+		wtd.ps <- lapply(seq_along(bins.avg.rl),function(i){
+			dt <- bins.lrpdist[[i]][[x]]
+			w <- as.numeric(log.rl.bins.dist[i])
+			return(dt*w)
+		})
+		# sum across bins
+		all.words <- unique(names(unlist(wtd.ps)))
+		sum.ps <- Reduce("+", lapply(wtd.ps, function(v){
+			out <- v[all.words]
+			out[is.na(out)] <- 0
+			names(out) <- all.words
+			out
+		}))
+	})
+	return(prob_list)
 }
 
 liktest_separable_lr = function(gwa,gwb,readL,depth=1,nsamp = 20,mc.cores=1,background=1e-10,return.kl = F,return.all=F){
