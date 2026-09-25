@@ -9,6 +9,10 @@ count_kmers_cpp <- function(snode_ids, circular, k) {
     .Call(`_fastKar_count_kmers_cpp`, snode_ids, circular, k)
 }
 
+sort_snodes_cpp <- function(snode_id, circular) {
+    .Call(`_fastKar_sort_snodes_cpp`, snode_id, circular)
+}
+
 hash_karyotype_cpp <- function(snode_id, circular) {
     .Call(`_fastKar_hash_karyotype_cpp`, snode_id, circular)
 }

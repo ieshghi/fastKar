@@ -256,27 +256,12 @@ sum_matrices <- function(matrices){
 #' @param target.bins either a GRanges, or a data.table. If DT, must have a column "width", giving the width of all the bins
 #' @return data.table with columns i,j,id,widthprod corresponding to all pairwise contacts, widthprod is the product of widths of tiles i and j
 make_template_dat = function(target.bins,if.comps=FALSE){
-    if(inherits(target.bins,'GRanges')){
-        widths = width(target.bins) %>% as.numeric
-        l = length(target.bins)
-    }else if(inherits(target.bins,'data.table')){
-        widths = target.bins$width
-        l = nrow(target.bins)
-    }
-    template.dat = CJ(i=1:l,j=1:l)[j>=i][,value:=0]
-    setkeyv(template.dat,c('i','j'))
-    if(if.comps){
-        target.bins[is.na(target.bins$compartment)]$compartment='A'
-        template.dat[,this.interaction:=paste0(target.bins[i]$compartment,target.bins[j]$compartment)]
-        template.dat[grepl('NA',this.interaction),this.interaction:=NA]
-        template.dat[this.interaction=='BA' | this.interaction=='AB',this.interaction:='diff']
-        template.dat[this.interaction=='AA' | this.interaction=='BB',this.interaction:='same']
-    } else{
-        template.dat[,this.interaction:='same']
-    }
-    template.dat[,widthprod:=widths[i]*widths[j]]
-    template.dat[,id:=.I]
-    return(template.dat)
+	if (inherits(target.bins,'GRanges')){
+		return(as.data.table(make_template_dat_cpp(gr2dt(target.bins))))
+	}
+	else if (inherits(target.bins,'data.table')){
+		return(as.data.table(make_template_dat_cpp(target.bins)))
+	}
 }
 
 #' Rcpp version of make_template_dat(), no compartments for now

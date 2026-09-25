@@ -68,19 +68,21 @@ prep_data_for_py <- function(gg,gm,depth,pix.size=1e5,target_region=NULL,write.t
   return(data.out)
 }
 
-bestfit_search = function(graph,hic,nsample,depth,pix.size=NULL,target_region=NULL,topk=1,mc.cores=1){
+bestfit_search = function(graph,hic,nsample,depth,pix.size=NULL,target_region=NULL,topk=1,mc.cores=1,keep.circular=T){
 	if (is.null(target_region)){
 		target_region = graph$footprint
 	}
 	if (is.null(pix.size)){
 		pix.size = median(width(hic$gr))
 	}
-	message('Sampling walks')
-	gw = sample.gwalks(graph,nsample,verbose=F,mc.cores=mc.cores)
-	message('Simulating Hi-C')
-	sims = pbmclapply(gw,function(w){forward_simulate(w,target_region=target_region,pix.size=pix.size,depth=depth)},mc.cores=mc.cores)
-	hic_rebin = hic$disjoin(sims[[1]]$gr)$agg(sims[[1]]$gr)
-	neglogliks = unlist(mclapply(sims,function(s){compmaps(s,hic_rebin,theta=2,ifsum=T)},mc.cores=mc.cores))
-	bestk = which(neglogliks %in% sort(neglogliks)[1:topk])
-	return(list(walks=gw[bestk],nll=neglogliks[bestk]))
+	gw = sample.gwalks(graph,nsample,verbose=F,mc.cores=mc.cores,keep.circular=keep.circular)
+	sims = mclapply(gw,function(w){forward_simulate(w,target_region=target_region,pix.size=pix.size,depth=depth)},mc.cores=mc.cores)
+	ratio = sum(hic$value)/sum(sims[[1]]$value)
+	neglogliks = unlist(mclapply(sims,function(s){compmaps(hic,s*ratio,theta=2,ifsum=T)},mc.cores=mc.cores))
+	if (topk==-1){
+		best = order(neglogliks)
+	}else{
+		best = order(neglogliks)[1:topk]
+	}
+	return(list(true_hic = hic,kars=gw[best],nlls=neglogliks[best],sims = sims[best]))
 }

@@ -49,9 +49,9 @@ call_gwalk_longreads = function(longreads, gwa, gwb, readL, depth){
 	return(list(called_gw = called_gw, loglikratio = loglikratio, sim_error_rate = simdata$error_rate, gwa_llr = simdata$gwa_ratios, gwb_llr = simdata$gwb_ratios))
 }
 
-longread_probdist = function(gwlist,readL,minsize=0,background=1e-10,mc.cores=1){
+longread_probdist = function(gwlist,readL,minsize=0,background=1e-10,use.nodes=NULL,mc.cores=1){
 	if (is(gwlist,'gWalk')){gwlist = list(gwlist)}
-	reads_list = mclapply(gwlist,function(x){reads_fromwalk(x,readL,minsize=minsize)},mc.cores=mc.cores)
+	reads_list = mclapply(gwlist,function(x){reads_fromwalk(x,readL,minsize=minsize,use.nodes=use.nodes)},mc.cores=mc.cores)
 	wordlist = lapply(reads_list,function(x){x$words})
 	all_words = unique(unname(unlist(wordlist)))#do.call('union',lapply(reads_list,function(x){x$words}))
 	mclapply(reads_list,function(x){
@@ -62,12 +62,12 @@ longread_probdist = function(gwlist,readL,minsize=0,background=1e-10,mc.cores=1)
 		   },mc.cores=mc.cores)
 }
 
-liktest_separable_lr = function(gwa,gwb,readL,depth=1,nsamp = 20,mc.cores=1,background=1e-10,return.kl = F,return.all=F){
+liktest_separable_lr = function(gwa,gwb,readL,depth=1,nsamp = 20,mc.cores=1,background=1e-10,use.nodes=NULL,return.kl = F,return.all=F){
 	context = sum(width(gwa$graph$footprint)) + 2*readL 
 	covperread = readL/context	
 	N = depth/covperread
 
-	pq = longread_probdist(list(gwa,gwb),readL,background=background)
+	pq = longread_probdist(list(gwa,gwb),readL,background=background,use.nodes=use.nodes)
 	p = pq[[1]]
 	q = pq[[2]]
 
@@ -86,14 +86,14 @@ liktest_separable_lr = function(gwa,gwb,readL,depth=1,nsamp = 20,mc.cores=1,back
 }
 
 liktest_separable = function(map_a,map_b,theta=2,nsamp = 20,mc.cores=1,error.thresh = NULL){
-	a_samples = make_noisydat(map_a,nsamp=nsamp,theta=theta)
+	a_samples = ake_noisydat(map_a,nsamp=nsamp,theta=theta)
 	b_samples = make_noisydat(map_b,nsamp=nsamp,theta=theta)
-	#compmaps is the negative log likelihood
+	#c,maskzeros=Tompmaps is the negative log likelihood
 	loglikratio = function(sample){-compdats(sample,map_a$dat)+compdats(sample,map_b$dat)}
 
 	a_ratios = unlist(mclapply(a_samples,loglikratio,mc.cores=mc.cores))
 	b_ratios = unlist(mclapply(b_samples,loglikratio,mc.cores=mc.cores))
-	error_rate = (sum(a_ratios < 0) + sum(b_ratios > 0)) / (2*nsamp)
+	error_rate = (sum(a_ratios <= 0) + sum(b_ratios >= 0)) / (2*nsamp)
 	return(error_rate)
 }
 
@@ -110,49 +110,19 @@ kl_nb <- function(mu1, mu2, r=2,tinyval=1e-10,ifsum=T) { #get KL divergence betw
   }
 }
 
-test.walks.with.hic <- function(walkset,hic.data,resolution=1e5,mc.cores=1,depth.est=1,target_region=NULL,if.diag=TRUE,return='scores',mask=NULL){
-    if(!is.list(walkset)){
-        stop('Give me multiple walks with the same footprint in a list to compare!')
-    }
-    if(is.null(target_region)) {
-        firstwalk = walkset[[1]]
-        target_region=firstwalk$footprint
-    }
-    predictions = mclapply(walkset,function(w){
-        return(forward_simulate(w,target_region=target_region,if.comps=F,pix.size=resolution,mc.cores=1,if.sum=T,depth=depth.est,model=0))
-    },mc.cores=mc.cores)
-    rebin.data = (hic.data$disjoin(predictions[[1]]$gr))$agg(predictions[[1]]$gr) #make sure data is aggregated on the same GRanges as the predictions
-
-    if (return=='scores'){
-        scores = mclapply(predictions,function(pred){compmaps(rebin.data,pred,ifsum=TRUE,theta=2,if.diag=if.diag,mask=mask)},mc.cores=mc.cores)
-        return(scores)
-    } else if (return=='scoremaps'){
-        scoremaps = mclapply(predictions,function(pred){compmaps(rebin.data,pred,ifsum=FALSE,theta=2,if.diag=if.diag,mask=mask)},mc.cores=mc.cores)
-        return(scoremaps)
-    } else if (return=='predictions'){
-        return(predictions)
-    } else if (return == 'sp') {
-        scores = mclapply(predictions,function(pred){compmaps(pred,rebin.data,ifsum=TRUE,theta=2,if.diag=if.diag,mask=mask)},mc.cores=mc.cores)
-        return(list(scores = scores, predictions = predictions, hic.data = rebin.data))
-    } else if (return == 'all') {
-        scores = mclapply(predictions,function(pred){compmaps(pred,rebin.data,ifsum=TRUE,theta=2,if.diag=if.diag,mask=mask)},mc.cores=mc.cores)
-        scoremaps = mclapply(predictions,function(pred){compmaps(pred,rebin.data,ifsum=FALSE,theta=2,if.diag=if.diag,mask=mask)},mc.cores=mc.cores)
-        return(list(scores = scores, predictions = predictions, scoremaps = scoremaps, hic.data = rebin.data))
-    }
-}
-
-compmaps <- function(map_exp,map_theory,theta=2,ifsum=F,if.diag=T,ifscale=F,mask=NULL,return_kl=F,area0=NULL){ 
+compmaps = function(map_exp,map_theory,theta=2,ifsum=F,if.diag=T,ifscale=F,mask=NULL,return_kl=F,area0=NULL,maskzeros=F){ 
    if (is.null(area0)){
 	gr = map_theory$gr
         medianwid = median(width(gr))
 	area0 = medianwid^2
    }
-   map_theory = map_theory$disjoin(map_exp$gr)$agg(map_exp$gr,weighted=T)
-   template = make_template_dat(map_exp$gr)
-   dat_exp = merge.data.table(template[,.(i,j,widthprod,id)],map_exp$dat[,.(i,j,value)],all.x=TRUE,by=c('i','j'))
-   dat_theory = merge.data.table(template[,.(i,j,widthprod,id)],map_theory$dat[,.(i,j,value)],all.x=TRUE,by=c('i','j'))
-   dat_exp[is.na(value),value:=0]
-   dat_theory[is.na(value),value:=0]
+   map_theory = rebin_matrix(map_theory,map_exp$gr)
+   map_exp = rebin_matrix(map_exp,map_exp$gr)
+   #template = make_template_dat(map_exp$gr)
+   #dat_exp = merge.data.table(template[,.(i,j,widthprod,id)],map_exp$dat[,.(i,j,value)],all.x=TRUE,by=c('i','j'))
+   #dat_theory = merge.data.table(template[,.(i,j,widthprod,id)],map_theory$dat[,.(i,j,value)],all.x=TRUE,by=c('i','j'))
+   #dat_exp[is.na(value),value:=0]
+   #dat_theory[is.na(value),value:=0]
    comp_dat = compdats(dat_exp,dat_theory,theta,ifsum=FALSE,if.diag=if.diag,return_kl=return_kl,area0=area0)
    if (!is.null(mask)){
        bad.inds = (map_exp$gr %&% mask)$tile.id
@@ -181,13 +151,14 @@ estimate.depthratio <- function(filepath,mode='hic',res=1e6,ploidy=2,if.chr=FALS
 }
 
 #returns negative log likelihood of test data given true data
-compdats <- function(dat_test,dat_true,theta=2,ifsum=TRUE,if.diag=TRUE,return_kl=F,area0=1e8){
+compdats = function(dat_test,dat_true,theta=2,ifsum=TRUE,if.diag=TRUE,return_kl=F,area0=1e8){
     setkey(dat_test,'id')
     setkey(dat_true,'id')
     if (is.null(dat_test$widthprod)){
         dat_test$widthprod= area0 #if the data.table doesn't have an area column, assume all pixels are the same size
     }
-    if (!all.equal(dat_test[,.(i,j,id)],dat_true[,.(i,j,id)])){stop('Equalize gMatrices before comparing data')}
+    if (all.equal(dat_test[,.(i,j,id)],dat_true[,.(i,j,id)])!=T){
+	    stop('Equalize gMatrices before comparing data')}
     combdat = merge.data.table(dat_test[,.(i,j,id,widthprod,value)],dat_true[,.(id,value)],by=c('id'))
     if(if.diag==FALSE){
         combdat = combdat[i!=j]
@@ -202,14 +173,15 @@ compdats <- function(dat_test,dat_true,theta=2,ifsum=TRUE,if.diag=TRUE,return_kl
         combdat[,logprob:=dpois(round(value.x),lambda = value.y,log=TRUE)]
     }
     combdat[value.y==0,logprob:=0]
-    if (ifsum==TRUE){
-        return(-sum((combdat$widthprod/area0)*combdat$logprob,na.rm=TRUE))
+    if (return_kl){
+	    combdat[,value:=widthprod/area0*kldiv]
     }else{
-	if (return_kl){
-        	return(combdat[,.(value=widthprod/area0*kldiv,i,j,id)])
-	}else{
-        	return(combdat[,.(value=-logprob*widthprod/area0,i,j,id)])
-	}
+	    combdat[,value:=-logprob*widthprod/area0]
+    }
+    if (ifsum==TRUE){
+        return(sum(combdat$value,na.rm=TRUE))
+    }else{
+	return(combdat[,.(value,i,j,id)])
     }
 }
 
@@ -224,6 +196,7 @@ make_noisydat = function(map_in,nsamp=1,theta=2){ #samples from negative binomia
     template = make_template_dat(map_in$gr)
     mapdat = merge.data.table(template[,.(i,j,widthprod,id)],mapdat[,.(i,j,value)],all.x=TRUE,by=c('i','j'))
     meanvals = mapdat$value
+    meanvals[is.na(meanvals)] = 0
     if (theta==0){
         newval = rpois(length(meanvals)*nsamp,rep(meanvals,nsamp))
     }else {
@@ -257,7 +230,7 @@ callloops = function(hic,gw,depth,fdr_cut = 0.01,resolution = NULL,sim.dat = NUL
 		reg = streduce(hic$gr)
 	}else{
 		hic.gr2 = hic$gr %&% reg
-		hic = hic$disjoin(hic.gr2)$agg(hic.gr2)
+		hic = hic$disjoin(hic.gr2)$agg(hic.gr2) #FIX THIS: should rebin sims, not true data
 	}
 	if (is.null(resolution)){
 		resolution = width(hic$gr[1])
@@ -291,17 +264,19 @@ callloops = function(hic,gw,depth,fdr_cut = 0.01,resolution = NULL,sim.dat = NUL
 #	If positive, it indicates a simulated Hi-C experiment of the given resolution. 
 #	If negative, it indicates a long-read experiment of the given read length
 #	If a list is input as "resolution", then output will be a list of the same shape
-neighbor_separable = function(gg,n_init,n_neighbor,sep_cutoff = 0.9,sep_samples = 20,resolution=NULL,depth=10,footprint=NULL,mc.cores=1){
-	if (!is.null(footprint)){gg = loosefix(gg %&% footprint)
-	}else{footprint = gg$footprint}
+neighbor_separable = function(gg,n_init,n_neighbor,use.nodes=NULL,sep_cutoff = 0.9,sep_samples = 20,resolution=NULL,depth=10,footprint=NULL,mc.cores=1){
+	if (is.null(footprint)){footprint = gg$footprint}
+	if (!is.null(use.nodes)){
+		frozen.nodes = gg$nodes$dt[!(node.id %in% use.nodes)]$node.id
+	}
 	out = rep(NA,length(resolution))
 	names(out) = ifelse(resolution>0,paste0('hic_',as.character(resolution)),paste0('lr_',as.character(abs(resolution))))
 	#sample n_init sets of walks. Each walk goes only 2 steps since we want nearest-neighbors, and we sample n_neighbor walks going from each starting point
-	neighbors = mclapply(1:n_init,function(i){local.sampling(gg,nsteps=2,nwalk=n_neighbor)},mc.cores=mc.cores)
+	neighbors = mclapply(1:n_init,function(i){local.sampling(gg,nsteps=2,nwalk=n_neighbor,frozen.nodes=frozen.nodes)},mc.cores=mc.cores)
 	#from all that sampling, grab the first step of every walk set as the init walk from that set
-	init_gw = lapply(neighbors,function(gwl){lapply(gwl,function(gwi){gW(graph=gg,snode.id=gwi[[1]]$snode.id,circular=gwi[[1]]$circular)})})
+	init_gw = mclapply(neighbors,function(gwl){lapply(gwl,function(gwi){gW(graph=gg,snode.id=gwi[[1]]$snode.id,circular=gwi[[1]]$circular) %&% footprint})},mc.cores=mc.cores)
 	#now grab the second step of each of these as the nearest neighbor
-	neighbors_gw = lapply(neighbors,function(gwl){lapply(gwl,function(gwi){gW(graph=gg,snode.id=gwi[[2]]$snode.id,circular=gwi[[2]]$circular)})})
+	neighbors_gw = mclapply(neighbors,function(gwl){lapply(gwl,function(gwi){gW(graph=gg,snode.id=gwi[[2]]$snode.id,circular=gwi[[2]]$circular) %&% footprint})},mc.cores=mc.cores)
 	#make a table of all the comparisons to be made between walks and their nearest neighbors
 	comppairs = CJ(init.id = seq_along(init_gw),neighbor.id = 1:n_neighbor)
 	#check which ones are identical (we sample allowing for overlaps) and throw out those samples
@@ -320,7 +295,7 @@ neighbor_separable = function(gg,n_init,n_neighbor,sep_cutoff = 0.9,sep_samples 
 		gw2 = neighbors_gw[[i]][[j]]
 		outrow = lapply(1:length(resolution),function(y){
 			res = resolution[y]
-			if (res<0){1-liktest_separable_lr(gw1,gw2,readL=abs(res),depth=depth,nsamp=sep_samples)
+			if (res<0){1-liktest_separable_lr(gw1,gw2,readL=abs(res),depth=depth,nsamp=sep_samples,use.nodes=use.nodes)
 			}else if (res>0){
 				map_1 = forward_simulate(gw1,target_region=footprint,pix.size=res,depth=depth)
 				map_2 = forward_simulate(gw2,target_region=footprint,pix.size=res,depth=depth)
@@ -377,4 +352,17 @@ minimal_readlength = function(gw1,gw2){
 	width_lookup = setNames(gw1$graph$nodes$dt$width, gw1$graph$nodes$dt$node.id)
 	midnodes[, width_sum := rowSums(matrix(width_lookup[as.character(abs(as.matrix(.SD)))],nrow = .N),na.rm = TRUE), .SDcols = keepcols]
 	return(min(midnodes$width_sum))
+}
+
+rebin_matrix = function(gm,target_gr,writezeros=T){
+	gm2 = gm$disjoin(target_gr)$agg(target_gr)
+	outdt = make_template_dat(target_gr)
+	same_coordinates <- nrow(gm2$dat) == nrow(outdt) && identical(gm2$dat$i,  outdt$i) && identical(gm2$dat$j,  outdt$j) && identical(gm2$dat$id, outdt$id)
+	if(!same_coordinates){
+		setkey(outdt,i,j)
+		outdt[gm2$dat, on = .(i, j), value := i.value]
+		return(gM(gr=target_gr,dat=outdt))
+	}else{
+		return(gm2)
+	}
 }

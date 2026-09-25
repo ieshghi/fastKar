@@ -12,4 +12,5 @@
 # different SIMD capabilities), replace it with `-march=x86-64-v3` for AVX2
 # baseline compatibility, or `-march=haswell` for the equivalent.
 
-PKG_CXXFLAGS = -march=native -ftree-vectorize -fno-math-errno
+#PKG_CXXFLAGS = -march=native -ftree-vectorize -fno-math-errno
+PKG_CXXFLAGS = -ftree-vectorize -fno-math-errno

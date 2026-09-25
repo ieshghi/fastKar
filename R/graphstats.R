@@ -120,7 +120,7 @@ sample.gwalks = function(gg,N=1,mc.cores=1,chunksize = 1e3,return.gw=T,remove.du
 }
 
 #samples karyotype space using markov chains always starting at the same walk, initialized randomly. 
-local.sampling = function(gg,nsteps,nwalk,onlyhash=F,starter_edges=NULL,return.edges=F,return.gw=F){
+local.sampling = function(gg,nsteps,nwalk,frozen.nodes=NULL,onlyhash=F,starter_edges=NULL,return.edges=F,return.gw=F){
   wiring = gg.to.wiring(gg)
   shuffle_edges = function(edges) {
         new_right = edges[, if (.N > 1) sample(right, .N) else right, by = n]$V1
@@ -135,7 +135,7 @@ local.sampling = function(gg,nsteps,nwalk,onlyhash=F,starter_edges=NULL,return.e
   hashhist = c()
   permute.node = function(edges) {
   	if (nrow(edges[cn>1])==0){return(edges)}
-	pivot.node = sample(edges[cn>1]$n,1)
+	pivot.node = sample(setdiff(edges[cn>1]$n,frozen.nodes),1)
 	new_edges = data.table::copy(edges)
 	edges.to.permute = edges[n==pivot.node]$right
 	inds = sample(seq_along(edges.to.permute),2)
@@ -251,7 +251,7 @@ markov.gwalk = function(gg,len,self.avoid = F,attempts = 10,return.gw=F,seed=NUL
   	return(edges[,right:=new_right])
   }
   gw0 = traverse_graph_cpp(shuffle_edges(internal.edges),loose.ends)
-  gw0$hash = hash_snodelist(gw0$snode.id,gw0$circular)
+  gw0$hash = hash_karyotype_cpp(gw0$snode.id,gw0$circular)
   walkhist[[1]] = gw0
   hashhist = c(hashhist,gw0$hash)
   for (i in seq_len(len-1)){
@@ -261,7 +261,7 @@ markov.gwalk = function(gg,len,self.avoid = F,attempts = 10,return.gw=F,seed=NUL
 		if (!valid){
 			edge_try = permute.node(internal.edges)	
 			walk_try = traverse_graph_cpp(edge_try,loose.ends)
-			hash_try = hash_snodelist(walk_try$snode.id,walk_try$circular)
+			hash_try = hash_karyotype_cpp(walk_try$snode.id,walk_try$circular)
 			if (self.avoid){
 				valid = !(hash_try %in% hashhist)
 			} else{valid=T}
@@ -333,55 +333,13 @@ booth_rotate = function(x) { #an implementation of Booth's algorithm to disambig
 	}
 }
 
-hash_snodelist = function(snode.id,circular){
-	sorted = sort_snodes(snode.id,circular)
-	snode.id = sorted$nodelist
-	circular = sorted$circ
-	circ = ifelse(rep(circular,2),'C','L')
-	nodepcomp = c(snode.id,lapply(snode.id,function(s){-rev(s)}))
-	nodestring = lapply(1:length(nodepcomp),function(i){
-		return(paste0(toString(nodepcomp[[i]]),circ[i]))
-	})
-	return(toString(sort(do.call('c',nodestring))))
-}
-
 sort_snodes = function(nodelist,circ=NULL) {
-	# Canonicalize circular walks to their Booth lex-min rotation in place;
-	# we still need the raw walk later to compute Booth(rc(W)) properly.
-	if (sum(circ)>0){
-		circ_walks = nodelist[circ]
-		circ_walks_rot = lapply(circ_walks,function(w){
-			return(booth_rotate(w))
-	})
-		nodelist[circ] = circ_walks_rot
+	# Fast C++ canonicalization using the same Booth-rotation implementation
+	# and lexicographic ordering as hash_karyotype_cpp().
+	if (is.null(circ)) {
+		return(sort_snodes_cpp(nodelist, rep(FALSE, length(nodelist))))
 	}
-	# For each walk pick the lex-min over its rotation+RC orbit.
-	# Linear:   compare W and rc(W).
-	# Circular: compare Booth(W) and Booth(rc(W)). The earlier code compared
-	#   Booth(W) to rc(Booth(W)), which is wrong because rc(Booth(W)) is not
-	#   generally the Booth rotation of rc(W) -- they differ by a cyclic
-	#   shift. That left RC-equivalent circular karyotypes presented in
-	#   different rotations with different canonical forms.
-	choose_compl = lapply(seq_along(nodelist), function(i) {
-		x = nodelist[[i]]
-		rc = -rev(x)
-		if (!is.null(circ) && length(circ) >= i && isTRUE(circ[i])) {
-			rc = booth_rotate(rc)
-		}
-		if (paste(x, collapse = ",") <= paste(rc, collapse = ",")) {
-			x
-		} else {
-			rc
-		}
-	})
-	ord <- order(sapply(choose_compl, paste, collapse = ","))
-	sorted_nodes = choose_compl[ord]
-	if (!is.null(circ)){
-		sorted_circ = circ[ord]
-		return(list(nodelist=sorted_nodes,circ=sorted_circ))
-	}else{
-		return(sorted_nodes)
-	}
+	return(sort_snodes_cpp(nodelist, circ))
 }
 
 #should introduce a threshold width for removing del/dups
@@ -408,68 +366,6 @@ smoothdeldups = function(ggraph,res=NULL){
 	}
 }
 
-sample_and_collapse = function(ggraph,samplesize,min.wid=3e7,bands=NULL,mc.cores=1){
-	message('Sampling walks')
-	walkset = sample.gwalks(ggraph,samplesize,return.gw=F,mc.cores=mc.cores)
-  	gr = ggraph$nodes$gr[,c('node.id')]
-	message('Collapsing to bands')
-	if (is.null(bands)){
-		merged.dt = gr2dt(gr)[,.(node.id,band.id=node.id,width,seqnames,start,end)]
-	} else if (inherits(bands,'GRanges')){
- 		merged.dt = gr2dt(gr.merge(gr,bands)[,c('query.id','subject.id')])[,.(node.id=query.id,band.id=subject.id,width=width,seqnames,start,end)]
-	} else if (inherits(bands,'character')){
-		bands.td = gTrack::karyogram(file = bands)
-		bands = bands.td@data
-		bands.gr = gr.nochr(grl.unlist(do.call(`GRangesList`, bands)))
-		bands.gr = bands.gr %Q% (seqnames %in% c(1:22,'X','Y'))
-		bands.gr = dt2gr(gr2dt(bands.gr)[,start:=start+1],seqlengths=seqlengths(bands.gr))
- 		merged.dt = gr2dt(gr.merge(gr,bands.gr)[,c('query.id','subject.id')])[,.(node.id=query.id,band.id=subject.id,width=width,seqnames,start,end)]
-	} else {
-		error('Bands provided must either be GRanges or a path to cytobands file')
-	}
-	collapsed.walks = collapse_gwalklist(walkset,merged.dt,min.wid,mc.cores)
-
-	message('Hashing and counting samples')
-	coll_hashes = sapply(collapsed.walks, `[[`, "hash")
-	coll_hash.dt = data.table(collapsed.hash=unlist(coll_hashes))[,walkset.id:=.I][,collapsed.id:=as.integer(factor(coll_hashes))]
-	coll_hash.dt[,count:=.N,by=collapsed.id]
-	setkeyv(coll_hash.dt,'collapsed.id')
-	coll_hash.dt[,instance:=1:.N,by=collapsed.id]
-	coll_idx = coll_hash.dt[instance==1]$walkset.id
-	unique.collapsed = coll_hash.dt[instance==1,.(walkset.id,collapsed.id)]
-	collapsed.walks = collapsed.walks[coll_idx]
-
-	return(list(graph=ggraph,walkset=walkset,collapsed.walks=collapsed.walks,bands=dt2gr(merged.dt),hash.dt=coll_hash.dt))
-}
-
-#' @import pbapply
-collapse_gwalklist <- function(gwlist,merged.dt,min.wid,mc.cores=1){
-  merged.dt[,row_id:=.I]
-  collapsed.list = pbmclapply(gwlist, function(gw) {
-      walknodes = gw$snode.id
-      circular = gw$circular
-      collapsed.walk = lapply(walknodes,function(x){
-        walk = merge.data.table(data.table(step=1:length(x),snode.id=x,node.id = abs(x),strand=sign(x)),merged.dt[,.(node.id,row_id,width,seqnames)],by='node.id',allow.cartesian=T)[,.(step,strand,snode.id,width,row_id,seqnames)]
-	walk[strand==-1,row_id:=-rev(row_id),by=step]
-	setkeyv(walk,'step')
-	walk[,breakpt:=((row_id-shift(row_id)!=1)|(seqnames!=shift(seqnames)))][,breakpt:=ifelse(is.na(breakpt),T,breakpt)]
-	walk[,run_id:=cumsum(breakpt)]
-	walk[,small:=sum(width)<min.wid,by=run_id]
-	walk[,runofruns:=cumsum(abs(rev(circdiff(rev(small),-1))))] #lol
-	walk[,keep:=(!small | sum(width)>min.wid),by=runofruns]
-	walk_kept = walk[keep==T][,.(row_id,seqnames,width,ufo=small)]
-	walk_kept[,breakpt:=((row_id-shift(row_id)!=1)|(seqnames!=shift(seqnames)))][,breakpt:=ifelse(is.na(breakpt),T,breakpt)]
-	walk_kept[,run_id:=cumsum(breakpt)]
-	walk_kept[,row_out:=ifelse(ufo,NA,row_id)]
-	outdat = walk_kept$row_out
-	outdat = outdat[c(TRUE, !(is.na(outdat[-1]) & is.na(outdat[-length(outdat)])))]
-	return(outdat)
-      })
-      return(list(snode.id = collapsed.walk,circular = circular,hash=hash_snodelist(collapsed.walk,circular)))
-      }, mc.cores=mc.cores)
-  return(collapsed.list)
-}
-
 to_gwalk = function(walklist,gr,mc.cores=1){
 	grl = mclapply(walklist$snode.id,function(nl){
 		nl = nl[!is.na(nl)]
@@ -482,9 +378,12 @@ to_gwalk = function(walklist,gr,mc.cores=1){
 	return(gW(grl=grl,circular=walklist$circular[keep])$disjoin())
 }
 
-reads_fromwalk = function(walk,readL,minsize=0){
+reads_fromwalk = function(walk,readL,minsize=0,use.nodes=NULL){
 	gr = walk$graph$gr[,c('node.id')]
 	tinynodes = gr[width(gr) < minsize]$node.id
+	if (!is.null(use.nodes)){
+		tinynodes = c(tinynodes,gr$node.id[!(gr$node.id %in% use.nodes)])
+	}
 	reads = do.call('rbind',lapply(1:length(walk$snode.id),function(i){
 		snodes = walk$snode.id[[i]]
 		widths = width(gr[abs(snodes)])
@@ -537,7 +436,7 @@ reads_fromwalk = function(walk,readL,minsize=0){
       return(unique(reads))
 }
 
-longread_kl = function(walk_x, walk_y, graph=NULL,readL=1e4, depth = 1, background = 1e-5,mc.cores=1) {
+longread_kl = function(walk_x, walk_y, graph=NULL,readL=1e4, depth = 1, background = 1e-5,use.nodes=use.nodes,mc.cores=1) {
 	if (is.null(walk_x$graph)){
 		if(is.null(graph)){
 			error('Must provide either a gWalk object or a graph as input to function')
@@ -547,7 +446,7 @@ longread_kl = function(walk_x, walk_y, graph=NULL,readL=1e4, depth = 1, backgrou
 	}else{
 		graph = walk_x$graph
 	}
-	liktest_separable_lr(walk_x,walk_y,readL=readL,depth=depth,background=background,mc.cores=mc.cores,return.kl=T)
+	liktest_separable_lr(walk_x,walk_y,readL=readL,depth=depth,background=background,mc.cores=mc.cores,use.nodes=use.nodes,return.kl=T)
 }
 
 hic_kl = function(walk_x, walk_y, target_region=NULL, graph=NULL,pix.size=1e6, depth = 1,theta=2,mask=NULL) {
@@ -608,16 +507,18 @@ alignscore_compl = function(x,y,gp){
 	else{return(s1)}
 }
 
-edit_dist_cpp = function(gwx,gwy,graph=NULL,thresh=0,return_all = F,constpenalty=F){
+edit_dist_cpp = function(gwx,gwy,graph=NULL,return_all = F,constpenalty=F,use.nodes=NULL){
 	if (is.null(graph)){
 		graph = gwx$graph
 		if (is.null(graph)){
 			error('Must provide a graph object or have a graph as an element of gwx')
 		}
 	}
-
 	nodedt = graph$nodes$dt[,.(width,node.id)]
-	widthvec = setNames(graph$nodes$dt$width,graph$nodes$dt$node.id)
+	if (!is.null(use.nodes)){
+		nodedt[!(node.id %in% use.nodes)]$width=0
+	}
+	widthvec = setNames(nodedt$width,nodedt$node.id)
 	ids = as.integer(names(widthvec))
 	max_id = max(abs(ids))
 	penalty = numeric(max_id)
@@ -626,15 +527,8 @@ edit_dist_cpp = function(gwx,gwy,graph=NULL,thresh=0,return_all = F,constpenalty
 	}else{
 		penalty[abs(ids)] = -widthvec
 	}
-
 	sn_x = sort_snodes(gwx$snode.id,gwx$circular)$nodelist
 	sn_y = sort_snodes(gwy$snode.id,gwy$circular)$nodelist
-	x_totlen = vapply(sn_x,function(ids) sum(widthvec[as.character(abs(ids))]),numeric(1))
-	y_totlen = vapply(sn_y,function(ids) sum(widthvec[as.character(abs(ids))]),numeric(1))
-
-	sn_x = sn_x[x_totlen > thresh]
-	sn_y = sn_y[y_totlen > thresh]
-
 	n = length(sn_x)
 	m = length(sn_y)
 	if (n<m){
@@ -643,55 +537,15 @@ edit_dist_cpp = function(gwx,gwy,graph=NULL,thresh=0,return_all = F,constpenalty
 		sn_y = c(sn_y,rep(list(integer(0)),n-m))
 	}
 	n = max(n,m)
-
 	costmat = compute_cost_matrix_cpp(sn_x, sn_y, penalty)
 	assignment = clue::solve_LSAP(pmax(costmat,0),maximum=F)
 	optscores = costmat[cbind(seq_along(assignment),assignment)]
-	if (return_all){return(list(assignment,optscores))}else{return(sum(optscores[optscores > thresh]))}
-}
-
-edit_dist = function(gwx,gwy,graph=NULL,thresh=0,return_all = F){
-	if (is.null(graph)){
-		graph = gwx$graph
-		if (is.null(graph)){
-			error('Must provide a graph object or have a graph as an element of gwx')
-		}
-	}
-
-	nodedt = graph$nodes$dt[,.(width,node.id)]
-	widthvec = setNames(graph$nodes$dt$width,graph$nodes$dt$node.id)
-	gap_penalties = -widthvec
-
-	sn_x = sort_snodes(gwx$snode.id,gwx$circular)$nodelist
-	sn_y = sort_snodes(gwy$snode.id,gwy$circular)$nodelist
-	x_totlen = vapply(sn_x,function(ids) sum(widthvec[as.character(abs(ids))]),numeric(1))
-	y_totlen = vapply(sn_y,function(ids) sum(widthvec[as.character(abs(ids))]),numeric(1))
-
-	sn_x = sn_x[x_totlen > thresh]
-	sn_y = sn_y[y_totlen > thresh]
-
-	n = length(sn_x)
-	m = length(sn_y)
-	if (n<m){
-		sn_x = c(sn_x,rep(list(NULL),m-n))
-	}else if (m<n){
-		sn_y = c(sn_y,rep(list(NULL),n-m))
-	}
-	n = max(n,m)
-
-	comppairs = CJ(i=1:n,j=1:n)
-	costs = -unlist(lapply(1:nrow(comppairs),function(x){alignscore_compl(sn_x[[comppairs[x]$i]],sn_y[[comppairs[x]$j]],gap_penalties)}))
-	comppairs[,cost:=costs]
-	costmat = data.matrix(tidyr::pivot_wider(comppairs,names_from=j,values_from=cost)[,-1])
-	assignment = clue::solve_LSAP(costmat,maximum=F)
-
-	optscores = costmat[cbind(seq_along(assignment),assignment)]
-	if (return_all){return(list(assignment,optscores))}else{return(sum(optscores[optscores > thresh]))}
+	if (return_all){return(list(assignment,optscores))}else{return(sum(optscores))}
 }
 
 #just a wrapper function to calculate all distance pairs
 #if you want to skip calculating Hi-C (or long-read) distances, set pix.size=0 (or readL=0). To avoid edit distances, set edit_thresh=NA
-get_dists = function(gw,graph=NULL,target_region=NULL,pix.size=0,readL=0,edit_thresh=NA,depth=1,mc.cores=1){
+get_dists = function(gw,graph=NULL,target_region=NULL,pix.size=0,readL=0,edit_thresh=NA,use.nodes=NULL,depth=1,mc.cores=1){
 	if (is.null(target_region)){target_region = gw[[1]]$footprint}
 	comppairs = CJ(i=seq_along(gw),j=seq_along(gw))[i>j]
 	if (pix.size>0){
@@ -703,14 +557,14 @@ get_dists = function(gw,graph=NULL,target_region=NULL,pix.size=0,readL=0,edit_th
 	if (!is.na(edit_thresh)){
 	message('Calculating edit distances')
 	edit_dists = unlist(pbmclapply(1:nrow(comppairs),function(x){
-		edit_dist_cpp(gw[[comppairs[x]$i]],gw[[comppairs[x]$j]],graph=graph,thresh=edit_thresh)
+		edit_dist_cpp(gw[[comppairs[x]$i]],gw[[comppairs[x]$j]],graph=graph,use.nodes=use.nodes)
 				   },mc.cores=mc.cores))
 	comppairs[,edit:=edit_dists]
 	}
 	if (readL>0){
 	message('Calculating long-read distances')
 	lr_dists = unlist(pbmclapply(1:nrow(comppairs),function(x){
-		longread_kl(gw[[comppairs[x]$i]],gw[[comppairs[x]$j]],graph=graph,readL=readL,depth=depth)
+		longread_kl(gw[[comppairs[x]$i]],gw[[comppairs[x]$j]],graph=graph,readL=readL,depth=depth,use.nodes=use.nodes)
 			   },mc.cores=mc.cores))
 	comppairs[,longread:=lr_dists]
 	}
@@ -757,273 +611,82 @@ paste_loose_ends_timed = function(gg,seed=NULL,maxtime=NULL){
 	if (is.null(maxtime)){return(paste_loose_ends(gg,seed))}
 	result = tryCatch(
 	  R.utils::withTimeout({paste_loose_ends(gg,seed)},timeout = maxtime,onTimeout = "error"),
-	  TimeoutException = function(e) {return(gg)}
+	  TimeoutException = function(e) {stop(e)}
 	)
 }
-paste_loose_ends <- function(gg,seed=NULL){
-    work = gr2dt(gg$loose)[cn>0 & terminal==F][,row:=.I][,.(strand,node.cn,cn,index,node.id,orientation,row)]
-
-    leftover = work[0,]
+paste_loose_ends <- function(gg, seed = NULL) {
+    work <- gr2dt(gg$loose)[cn > 0 & terminal == FALSE][, row := .I][, .(strand, node.cn, cn, index, node.id, orientation, row)]
+    if (!nrow(work))
+        return(gg$copy)
+    work[, cn := as.integer(cn)]
+    ## If the total CN is odd, one copy necessarily remains unpaired.
+    leftover <- work[0]
     leftover[, unpaired.cn := integer()]
-
-    if (sum(work$cn) %% 2 == 1) {
+    if (sum(work$cn) %% 2L == 1L) {
         if (!is.null(seed))
             set.seed(seed)
-        ## Weighted by CN = uniform sampling over loose-end copies.
-        k = sample.int(nrow(work),1,prob = work$cn)
-        leftover = work[k]
-        leftover[,unpaired.cn:=1]
-        work[k, cn := cn - 1]
-        work = work[cn > 0]
+        ## Sampling proportional to CN is equivalent to selecting
+        ## a uniformly random loose-end copy.
+        k <- sample.int(nrow(work), 1L, prob = work$cn)
+        leftover <- copy(work[k])
+        leftover[, unpaired.cn := 1L]
+        work[k, cn := cn - 1L]
     }
-    #helper functions
-    canonical = function(r) {sort(as.integer(r[r > 0]))}
-    state_key = function(r) {paste0("s:", paste(r, collapse = ","))}
-    lower_bound = function(r) {(length(r) + 1L) %/% 2L}## One junction type can remove at most two active ends.
-    greedy_upper_bound = function(r) {
-        r = canonical(r)
-        n.used = 0
-        if (sum(r) %% 2 != 0)stop("Internal error: residual CN sum is odd.")
-        while (length(r) >= 2) {
-            ## Best easy case: completely paste two equal CNs.
-            duplicated.cn = unique(r[duplicated(r)])
-            if (length(duplicated.cn)) {
-                v = max(duplicated.cn)
-                ii = which(r == v)[1:2]
-                r = r[-ii]
-            } else {
-                ## Otherwise completely consume the smallest end
-                ## against the largest.
-                r[length(r)] = r[length(r)] - r[1]
-                r = canonical(r[-1])
+    residual <- work$cn
+    moves <- list()
+    add_move <- function(i, j, cn) {
+        moves[[length(moves) + 1L]] <<- data.table(i = i,j = j,loose1 = work$index[i],loose2 = work$index[j],cn = as.integer(cn),foldback = i == j)
+    }
+    while (any(residual > 0L)) {
+        active <- which(residual > 0L)
+        ## Only one end remains: close it with a foldback.
+        if (length(active) == 1L) {
+            i <- active[1L]
+            if (residual[i] %% 2L != 0L) {
+                stop(
+                    "Cannot consume the final loose end: residual CN is odd."
+                )
             }
-            n.used = n.used + 1L
+            add_move(i, i, residual[i] %/% 2L)
+            residual[i] <- 0L
+            next
         }
-        ## The final residual, if present, must be even and can
-        ## be absorbed by one fold-back.
-        if (length(r) == 1L) {
-            if (r[1L] %% 2L != 0L)
-                stop("Internal error: odd residual CN.")
-            n.used = n.used + 1L
+        active.cn <- residual[active]
+        ## Prefer completely matching two equal-CN ends.
+        duplicated.cn <- unique(active.cn[duplicated(active.cn)])
+        if (length(duplicated.cn)) {
+            ## Prefer the largest exact match.
+            target.cn <- max(duplicated.cn)
+            pair <- active[active.cn == target.cn][1:2]
+            i <- pair[1L]
+            j <- pair[2L]
+            w <- target.cn
+        } else {
+            ## Otherwise pair the two largest residual ends.
+            pair <- active[order(residual[active], decreasing = TRUE)][1:2]
+            i <- pair[1L]
+            j <- pair[2L]
+            w <- min(residual[i], residual[j])
         }
-        n.used
+        add_move(i, j, w)
+        residual[i] <- residual[i] - w
+        residual[j] <- residual[j] - w
     }
-    make_moves = function(r) {
-	    r = canonical(r)
-	    if (!length(r))
-	        return(list())
-	    n = length(r)
-	    ## Always choose the largest residual-CN end.
-	    i = n
-	    ri = r[i]
-	    moves = list()
-	    seen = new.env(hash = TRUE, parent = emptyenv())
-	    ## Add a move unless another move has already produced
-	    ## the same canonical child state.
-	    push_move = function(j, w, foldback, child) {
-	        child = canonical(child)
-	        key = state_key(child)
-	        if (exists(key, envir = seen, inherits = FALSE)){return(NULL)}
-	        assign(key, TRUE, envir = seen)
-	        list(i = i,j = j,w = as.integer(w),foldback = foldback,child = child)
-	    }
-	    if (n >= 2L) {
-	        ## Only one representative partner is needed for each
-	        ## distinct residual CN.
-	        partner.cn = unique(r[seq_len(n - 1L)])
-	        for (v in partner.cn) {
-	            j = which(r == v)[1L]
-	            ## Since i is the maximum residual CN:
-	            ## min(ri, v) == v.
-	            for (w in seq_len(v)) {
-	                child = r
-	                child[i] = child[i] - w
-	                child[j] = child[j] - w
-	                move = push_move(j = j,w = w,foldback = FALSE,child = child)
-	                if (!is.null(move)){moves[[length(moves) + 1L]] = move}
-	            }
-	        }
-	    }
-	    if (ri >= 2L) {
-	        for (w in seq_len(ri %/% 2L)) {
-	            child = r
-	            child[i] = child[i] - 2L * w
-	            move = push_move(j = i,w = w,foldback = TRUE,child = child)
-	            if (!is.null(move)){moves[[length(moves) + 1L]] = move}
-	        }
-	    }
-	    if (!length(moves)){stop("Internal error: no moves from state ",paste(r, collapse = ",")," (sum = ", sum(r), ")")}
-	    score = unlist(lapply(moves,function(a){1L + greedy_upper_bound(a$child)}))
-	    active = unlist(lapply(moves,function(a){length(a$child)}))
-	    moves[order(score, active)]
-	}
-        memo <- new.env(hash = TRUE, parent = emptyenv())
-	cost.memo = new.env(hash = TRUE,parent = emptyenv())
-	move.memo <- new.env(hash = TRUE,parent = emptyenv())
-	solve_cost <- function(r) {
-	    r <- canonical(r)
-	    if (!length(r)){return(0)}
-	    if (sum(r) %% 2 != 0)stop("Internal error: odd residual state ",paste(r, collapse = ","))
-	    key = state_key(r)
-	    if (exists(key,envir = cost.memo,inherits = FALSE)) {
-	        return(get(key,envir = cost.memo,inherits = FALSE))
-	    }
-	    ## A single active end is necessarily handled by
-	    ## one fold-back.
-	    if (length(r) == 1L) {
-	        stopifnot(r[1L] %% 2L == 0L)
-	        move <- list(i = 1L,j = 1L,w = r[1L] %/% 2L,foldback = TRUE,child = integer())
-	        assign(key,1L,envir = cost.memo)
-	        assign(key,move,envir = move.memo)
-	        return(1L)
-	    }
-	    lb = lower_bound(r)
-	    best = Inf
-	    best.move = NULL
-	    for (move in make_moves(r)) {
-	        ## Once we have a feasible incumbent, prune states
-	        ## that cannot possibly improve it.
-	        if (is.finite(best) && 1 + lower_bound(move$child) >= best) {next}
-	        cost = 1 + solve_cost(move$child)
-	        if (cost < best) {
-	            best = cost
-	            best.move = move
-	            ## The theoretical lower bound has been reached.
-	            if (best == lb){break}
-	        }
-	    }
-	    if (is.null(best.move))stop("Internal error: failed to solve state ",paste(r, collapse = ","))
-	    best = as.integer(best)
-	    assign(key,best,envir = cost.memo)
-	    assign(key,best.move,envir = move.memo)
-	    best
-	}
-    initial.state = canonical(work$cn)
-    optimal.cost = solve_cost(initial.state)
-    residual = work$cn
-    moves = vector("list", optimal.cost)
-    for (step in seq_len(optimal.cost)){
-	active = which(residual>0)
-	active = active[order(residual[active],active)]
-	r = residual[active]
-	chosen = get(state_key(r),envir=move.memo)
-	ii = active[chosen$i]
-	jj = active[chosen$j]
-	if (ii==jj){
-		residual[ii] = residual[ii]-2*chosen$w
-	}else{
-		residual[ii] = residual[ii]-chosen$w
-		residual[jj] = residual[jj]-chosen$w
-	}
-	aa = min(ii,jj)
-	bb = max(ii,jj)
-	moves[[step]] = data.table(i=work$row[aa],j=work$row[bb],
-		loose1=work$index[aa],loose2=work$index[bb],
-		cn=chosen$w,foldback=aa==bb)
-    }
-    if (any(residual != 0L)){stop("Internal error: reconstruction left residual CN.")}
-    junctions = if (length(moves)) {rbindlist(moves)
+    junctions <- if (length(moves)) {rbindlist(moves)
     } else {
         data.table(i = integer(),j = integer(),loose1 = work$index[0],loose2 = work$index[0],cn = integer(),foldback = logical())
     }
-    repeated = junctions[,.N,by = .(i, j)][N > 1L]
-    if (nrow(repeated)){stop("Internal error: reconstruction repeated a junction pair.")}
-    #list(junctions = junctions,leftover = leftover,n.unique.junctions = nrow(junctions),n.states = length(ls(memo, all.names = TRUE)))
-    newgg = gg$copy
-    loosedt = gr2dt(gg$loose)[cn>0 & terminal==F][,row:=.I][,.(row,node.id,orientation,cn)]
-    newedges = junctions[,.(cn,
-	n1=loosedt$node.id[i],
-	n2=loosedt$node.id[j],
-	n1.side=loosedt$orientation[i],
-	n2.side=loosedt$orientation[j],
-	type='ALT')]
-    newgg = gG(nodes=gg$nodes$gr,edges=rbind(gg$edges$dt,newedges,fill=T))
-    newgg = loosefix(newgg)
+    ## Every non-foldback move exhausts at least one endpoint,
+    ## so the same pair should never be generated twice.
+    repeated <- junctions[, .N, by = .(pmin(i, j), pmax(i, j))][N > 1L]
+    if (nrow(repeated))
+        stop("Internal error: a junction pair was generated more than once.")
+    newedges <- junctions[, .(cn,n1 = work$node.id[i],n2= work$node.id[j],n1.side = work$orientation[i],n2.side = work$orientation[j],type    = "ALT")]
+    newgg <- gG(nodes = gg$nodes$gr,edges = rbind(gg$edges$dt, newedges, fill = TRUE))
+    newgg <- loosefix(newgg)
     newgg$set(y.field = "cn")
-    return(newgg)
+    ## Attach these if you want to inspect what the heuristic did.
+    newgg
 }
 
-boil = function(gg,ft,N,k_return = 1,verbose=F,mc.cores=mc.cores){
-	if (is(ft,'character')){ft = streduce(parse.gr(ft))}
-	amplicon_nodes = (gg$nodes$gr %&% ft)$node.id %>% unique 
-	amplicon_context_nodes = (gg$nodes$gr %&% streduce(ft + 1e3))$node.id %>% unique 
-	freeze.nodes = gg$nodes$dt[!(node.id %in% amplicon_context_nodes)]$node.id #we don't want to freeze nodes directly adjacent to the amplicon, hence ft + 1e3
-	if(verbose){message('Sampling walks from graph')}
-	walks = get_unique_walks(gg,N,mode='circular',frozen.nodes = freeze.nodes,mc.cores=mc.cores) %&% ft
-	#get max CN of walks in the graph
-	if(verbose){message('Scoring walks')}
-	walknodes = walks$nodesdt[,.(walk.id,node.id=abs(snode.id),walk.iid)]
-	walknodes[,cn:=.N,by=c('node.id','walk.id')]
-	walknodes = merge.data.table(walknodes,gg$nodes$dt[,.(node.id,graph.cn=cn,width)],by=c('node.id'),all.x=T,cartesian=T)
-	walknodes[is.na(graph.cn),graph.cn:=0]
-	walknodes[,maxN:=graph.cn%/%cn]
-	walknodes[,max.walk.cn.nodes:=min(maxN),by=walk.id]
-	walknodes[,walk.cn:=max.walk.cn.nodes*cn]
-	walkedges = walks$edgesdt[,.(walk.id,edge.id=abs(sedge.id),walk.iid)]
-	walkedges[,cn:=.N,by=c('edge.id','walk.id')]
-	walkedges = merge.data.table(walkedges,gg$edges$dt[,.(edge.id,graph.cn=cn)],by=c('edge.id'),all.x=T,allow.cartesian=T)
-	walkedges[is.na(graph.cn),graph.cn:=0]
-	walkedges[,maxN:=graph.cn%/%cn]
-	walkedges[,max.walk.cn.edges:=min(maxN),by=walk.id]
-	walknodes = unique(merge.data.table(walknodes,walkedges[,.(walk.id,max.walk.cn.edges)],by='walk.id',all.x=T,allow.cartesian=T))
-	walknodes[,max.walk.cn:=min(max.walk.cn.nodes,max.walk.cn.edges),by='walk.id']
-	#what fraction of the amplicon does the walk account for
-	amplicon_weight = sum(gg$nodes$dt[amplicon_nodes]$cn * gg$nodes$dt[amplicon_nodes]$width)
-	walknodes[,ampfrac := max.walk.cn*sum(width*(node.id %in% amplicon_nodes)) / amplicon_weight,by=walk.id]
-	walkdt = unique(walknodes[,.(walk.id,ampfrac,score=max.walk.cn*ampfrac,max.walk.cn)])
-	#what is the entropy of the walk
-	#walknodes[,node.entropy := -max.walk.cn*cn/walk.cn*log(cn/walk.cn)]
-	#walknodes[,walk.entropy := sum(node.entropy),by=walk.id]
-	#score walks combining both these things.. entropy * amplicon fraction perhaps?
-	#NOTE: entropy calculation seems bad so far, so we use walk.cn * ampfrac as a score instead
-	ord = order(walkdt$score,decreasing=T)
-	sorted_walks = walks[walkdt[ord]$walk.id]
-	#make an ecDNA solution from the kth best walk
-	if(verbose){message(paste0('Genrating top-',k_return,' solutions'))}
-	if (length(sorted_walks) < k_return){k_return = length(sorted_walks)}
-	k_solns = mclapply(1:k_return,function(k){
-		walk_to_peel = sorted_walks[k]
-		peel_cn=walkdt[ord[k]]$max.walk.cn
-		#calculate what the remaining node and edge CN in the graph will be
-		edges_sub = merge.data.table(unique(walk_to_peel$edgesdt[,.(edge.id=abs(sedge.id))][,.(edge.id,sub_cn = .N*peel_cn),by=edge.id])[,.(edge.id,sub_cn)],gg$edges$dt[,.(edge.id,graph.cn=cn)],by='edge.id')[,.(edge.id,remaining_cn=graph.cn-sub_cn)]
-		nodes_sub = merge.data.table(unique(walk_to_peel$nodesdt[,.(node.id=abs(snode.id))][,.(node.id,sub_cn = .N*peel_cn),by=node.id])[,.(node.id,sub_cn)],gg$nodes$dt[,.(node.id,graph.cn=cn)],by='node.id')[,.(node.id,remaining_cn=graph.cn-sub_cn)]
-		#instantiate new graph with updated CNs, then sample from it to get the final walks to concatenate to the walks
-		gg_out = gg$copy
-		gg_out$nodes[nodes_sub$node.id]$mark(cn = nodes_sub$remaining_cn)
-		gg_out$edges[edges_sub$edge.id]$mark(cn = edges_sub$remaining_cn)
-		gg_out = loosefix(gg_out[,cn>0])
-		remaining.walks = sample.gwalks(gg_out,1,verbose=F)[[1]]
-		nr = length(remaining.walks)
-		combined.gw = gW(graph=gg,snode.id=c(remaining.walks$snode.id,rep(walk_to_peel$snode.id,peel_cn)),circular=c(remaining.walks$circular,rep(T,peel_cn)))
-		return(combined.gw)
-	},mc.cores=mc.cores)
-	return(k_solns)
-}
 
-#calculate entropy of the given nodes as distributed in the given gwalk object
-amp.entropy = function(gw,amp.nodes){
-	amp_nodesdt = gw$nodesdt[,.(walk.id,node.id=abs(snode.id))][node.id %in% amp.nodes]
-	amp_nodesdt[,walk.amp := .N,by=walk.id]
-	amp_nodesdt[,ampfrac:=walk.amp/nrow(.SD)]
-	walk.dist = unique(amp_nodesdt[,.(walk.id,ampfrac)])
-	-sum(walk.dist$ampfrac*log(walk.dist$ampfrac))
-}
-
-squeeze = function(gg,ft,N,k_return=1,verbose=F,mc.cores=1){
-	amplicon_nodes = (gg$nodes$gr %&% ft)$node.id %>% unique 
-	amplicon_context_nodes = (gg$nodes$gr %&% streduce(ft + 1e3))$node.id %>% unique 
-	freeze.nodes = gg$nodes$dt[!(node.id %in% amplicon_context_nodes)]$node.id #we don't want to freeze nodes directly adjacent to the amplicon, hence ft + 1e3
-	if (verbose){message('Sampling walks from graph')}
-	gwl = sample.gwalks(gg,N,frozen.nodes = freeze.nodes,verbose=F,mc.cores=mc.cores)
-	if (verbose){message('Scoring walks')}
-	entropies = unlist(lapply(gwl,function(gw){amp.entropy(gw,amplicon_nodes)}))
-	top_walks = gwl[order(entropies)[1:k_return]]
-	if(verbose){message(paste0('Genrating top-',k_return,' solutions'))}
-	mclapply(top_walks,function(gw){
-			 if (sum((gw %&% ft)$circular)>0){
-				 tryCatch({embedloops(gw)
-				 }, error = function(msg){
-				 return(gw)})
-			 }else{gw}
-			 },mc.cores=mc.cores)
-}

@@ -4,6 +4,7 @@
 #include <utility>
 #include <cstdint>
 #include <cstdio>
+#include <string>
 using namespace Rcpp;
 
 // Canonical-karyotype hash, C++ replacement for hash_snodelist (R/graphstats.R).
@@ -68,6 +69,59 @@ static std::vector<int> rc_walk(const std::vector<int>& s) {
   return r;
 }
 
+// Canonicalize and sort walks in the same order used by the hash below.
+static std::vector<std::pair<std::vector<int>, bool>> canonicalize_sorted_walks(
+    List snode_id, LogicalVector circular, const char* caller) {
+  const int K = snode_id.size();
+  if (K != circular.size())
+    Rcpp::stop(std::string(caller) + ": snode_id and circular have different lengths");
+
+  std::vector<std::pair<std::vector<int>, bool>> walks;
+  walks.reserve(K);
+
+  for (int k = 0; k < K; k++) {
+    IntegerVector iv = snode_id[k];
+    std::vector<int> w(iv.begin(), iv.end());
+    bool is_circ = (circular[k] == TRUE);
+
+    if (is_circ) {
+      std::vector<int> w_rc = rc_walk(w);
+      apply_booth_rotation(w);                 // w    = Booth(W)
+      apply_booth_rotation(w_rc);              // w_rc = Booth(rc(W))
+      walks.emplace_back((w_rc < w) ? std::move(w_rc) : std::move(w), is_circ);
+    } else {
+      std::vector<int> w_rc = rc_walk(w);
+      walks.emplace_back((w_rc < w) ? std::move(w_rc) : std::move(w), is_circ);
+    }
+  }
+
+  std::sort(walks.begin(), walks.end(),
+    [](const std::pair<std::vector<int>, bool>& a,
+       const std::pair<std::vector<int>, bool>& b) {
+      if (a.first != b.first) return a.first < b.first;
+      return a.second < b.second;
+    });
+
+  return walks;
+}
+
+// [[Rcpp::depends(Rcpp)]]
+// [[Rcpp::export]]
+List sort_snodes_cpp(List snode_id, LogicalVector circular) {
+  std::vector<std::pair<std::vector<int>, bool>> walks =
+    canonicalize_sorted_walks(snode_id, circular, "sort_snodes_cpp");
+
+  const int K = (int)walks.size();
+  List out_nodes(K);
+  LogicalVector out_circ(K);
+  for (int k = 0; k < K; k++) {
+    out_nodes[k] = IntegerVector(walks[k].first.begin(), walks[k].first.end());
+    out_circ[k] = walks[k].second;
+  }
+  return List::create(Named("nodelist") = out_nodes,
+                      Named("circ") = out_circ);
+}
+
 // ----------------------------------------------------------------------------
 // FNV-1a 64-bit byte stream hash.
 // ----------------------------------------------------------------------------
@@ -96,30 +150,15 @@ std::string hash_karyotype_cpp(List snode_id, LogicalVector circular) {
   // 1. Pull walks; canonicalize each.
   //    Circular: pick min(Booth(W), Booth(rc(W))) over the rotation+RC orbit.
   //    Linear:   pick min(W, rc(W)) lex.
-  std::vector<std::vector<int>> walks(K);
-  std::vector<bool> circ(K);
-  for (int k = 0; k < K; k++) {
-    IntegerVector iv = snode_id[k];
-    std::vector<int> w(iv.begin(), iv.end());
-    circ[k] = (bool)circular[k];
-
-    if (circ[k]) {
-      std::vector<int> w_rc = rc_walk(w);
-      apply_booth_rotation(w);                 // w    = Booth(W)
-      apply_booth_rotation(w_rc);              // w_rc = Booth(rc(W))
-      walks[k] = (w_rc < w) ? std::move(w_rc) : std::move(w);
-    } else {
-      std::vector<int> w_rc = rc_walk(w);
-      walks[k] = (w_rc < w) ? std::move(w_rc) : std::move(w);
-    }
-  }
+  std::vector<std::pair<std::vector<int>, bool>> walks =
+    canonicalize_sorted_walks(snode_id, circular, "hash_karyotype_cpp");
 
   // 2. Build doubled multiset: (walk, circ) + (rc(walk), circ).
   std::vector<std::pair<std::vector<int>, bool>> entries;
   entries.reserve(2 * K);
   for (int k = 0; k < K; k++) {
-    entries.emplace_back(walks[k], circ[k]);
-    entries.emplace_back(rc_walk(walks[k]), circ[k]);
+    entries.emplace_back(walks[k].first, walks[k].second);
+    entries.emplace_back(rc_walk(walks[k].first), walks[k].second);
   }
 
   // 3. Sort lex.
