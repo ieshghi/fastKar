@@ -21,18 +21,27 @@ forward_simulate <- function(walks,target_region = NULL,pix.size=1e5,if.comps=FA
     if (purity < 1 && !if.sum){
         stop('purity < 1 is currently supported only when if.sum = TRUE')
     }
-    prepped.data = prep_for_sim(walks,target_region,pix.size,if.comps)
+    if (is.null(target_region)){target_region = walks$footprint}
     haploid.depth = depth/2
+    prepped.data = prep_for_sim(walks,target_region,pix.size,if.comps)
     if (purity == 1){
         return(simulate_walks(walks,prepped.data$tiled.target,prepped.data$widthdt,if.comps,mc.cores,if.sum,haploid.depth,model,if.interchr,gm.out))
     }
-    tumor.sim = simulate_walks(walks,prepped.data$tiled.target,prepped.data$widthdt,if.comps,mc.cores,TRUE,haploid.depth*purity,model,if.interchr,T)
-    diploid.walks = make_diploid_walks(walks$graph)
-    normal.prepped = prep_for_sim(diploid.walks,target_region,pix.size,if.comps)
-    normal.sim = simulate_walks(diploid.walks,normal.prepped$tiled.target,normal.prepped$widthdt,if.comps,mc.cores,TRUE,haploid.depth*(1-purity),model,if.interchr,T)
-    return(normal.sim + tumor.sim)
-}
+    tumor.sim = simulate_walks(walks,prepped.data$tiled.target,prepped.data$widthdt,if.comps,mc.cores,TRUE,haploid.depth*purity,model,if.interchr,F)
+    normal.sim = simulate_diploid_map(prepped.data$tiled.target,if.comps=if.comps,depth=haploid.depth*(1-purity),model=model,if.interchr=if.interchr,gm.out=F)
 
+    combined.dat = merge.data.table(normal.sim$dat[,.(i,j,id,value)],
+				    tumor.sim$dat[,.(id,value)],
+				    by='id',all=TRUE,suffixes=c('.normal','.tumor'))
+    combined.dat[is.na(value.normal),normal.value:=0]
+    combined.dat[is.na(value.tumor),value.tumor:=0]
+    combined.dat = combined.dat[,.(i,j,id,value=value.normal+value.tumor)]
+    if (gm.out){
+        return(gM(gr=dt2gr(prepped.data$tiled.target),dat=combined.dat))
+    } else{
+        return(list(gr=prepped.data$tiled.target,dat=combined.dat))
+    }
+}
 
 #' Tile target region and prepare data necessary for Hi-C simulation. 
 #'
@@ -41,7 +50,7 @@ forward_simulate <- function(walks,target_region = NULL,pix.size=1e5,if.comps=FA
 #' @param pix.size resolution of the simulation tiles, default is 100kb. If set to 0, each tile corresponds to half a node in the gGraph.
 #' @param if.comps boolean setting whether or not to simulate compartments (defaults to FALSE)
 #' @return a list with two elements: "tiled.target", a data.table containing the tiles, their coordinates, and compartment identity, and "widthdt", a data.table containing the widths of all nodes from the input gGraph
-prep_for_sim <- function(walks,target_region=NULL,pix.size=1e5,if.comps=F){
+prep_for_sim = function(walks,target_region=NULL,pix.size=1e5,if.comps=F){
     #first, get nodes from graph
     if (is.null(walks$graph) | is.null(walks$graph$gr$cn)){
         stop('Please supply gGraph with CN in input walks object')
@@ -49,7 +58,6 @@ prep_for_sim <- function(walks,target_region=NULL,pix.size=1e5,if.comps=F){
     nodesgr = walks$graph$gr[,c('node.id','cn')] 
     nodesgr = nodesgr[strand(nodesgr)=='+']
     widthdt = gr2dt(nodesgr)[,.(nodewidth=width,node.id)]
-
     #then, subset to target region or make target region if not provided
     if (is.null(target_region)){
         if (is.null(walks$footprint)){
@@ -59,20 +67,25 @@ prep_for_sim <- function(walks,target_region=NULL,pix.size=1e5,if.comps=F){
             target_region = walks$footprint
         }
     }
-
-    #now, tile target region, merging with node boundaries
-    if (pix.size > 0){ #tiling mode
-        tiled.target = gr2dt(gr.merge(gr.tile(target_region,pix.size),nodesgr))
-        tiled.target[,tile.id:=.I]
-        tiled.target = tiled.target[,.(start,end,seqnames,tile.id,width,node.id,cn)]
-    } else{ # split node mode: tiles have variable size, each node is just two tiles
-        targetnodes = gr2dt(gr.merge(target_region,nodesgr))
-        nodesdt.split = targetnodes[rep(1:.N,each=2)][,side:=ifelse(mod(.I,2)==1,'left','right')][,.(start,end,seqnames,node.id,cn,side)][,width:=ifelse(side=='left',floor((end-start+1)/2),ceil((end-start+1)/2))]
-        nodesdt.split[side=='left',end:=start+width-1]
-        nodesdt.split[side=='right',start:=end-width+1]
-        tiled.target = nodesdt.split[,.(start,end,seqnames,node.id,side,width,cn)][,tile.id:=.I]
+    #now, tile target region, merging with node boundaries where the tumor graph is defined.
+    #If target_region extends outside the supplied graph, keep those extra tiles with
+    #node.id = NA and tumor cn = 0 so a diploid normal component can still be simulated
+    #on the full requested region without rebinning.
+    nodes.in.target = nodesgr %&% target_region
+    outside.target = GenomicRanges::setdiff(target_region,GenomicRanges::reduce(nodes.in.target),ignore.strand=TRUE)
+    tiled.parts = list()
+    if (length(nodes.in.target)){
+        tiled.parts[[length(tiled.parts)+1]] = gr2dt(gr.merge(gr.tile(target_region,pix.size),nodesgr))[,.(start,end,seqnames,width,node.id,cn)]
     }
-
+    if (length(outside.target)){
+        outside.dt = gr2dt(gr.tile(outside.target,pix.size))[,.(start,end,seqnames,width)]
+        outside.dt[,`:=`(node.id=NA_integer_,cn=0)]
+        tiled.parts[[length(tiled.parts)+1]] = outside.dt[,.(start,end,seqnames,width,node.id,cn)]
+    }
+    tiled.target = rbindlist(tiled.parts,use.names=TRUE,fill=TRUE)
+    setorder(tiled.target,seqnames,start,end,node.id)
+    tiled.target[,tile.id:=.I]
+    tiled.target = tiled.target[,.(start,end,seqnames,tile.id,width,node.id,cn)]
     #check for compartment data
     if (if.comps==FALSE){
         comps.gr = NULL
@@ -316,36 +329,66 @@ symmetrize <- function(input.mat){
     return(output.mat)
 }
 
-#' Construct a diploid reference gGraph over the whole genome
+#' Directly simulate a diploid reference Hi-C map on an existing tiling
 #'
-#' Builds a reference-like graph with copy-number 2 over chromosomes 1:22, X, Y.
-#' If a graph is supplied, the whole genome is disjoined against the graph nodes so
-#' normal-reference nodes respect the same breakpoints as the tumor graph.
+#' This is the fast/reference-specialized equivalent of simulating two linear
+#' reference homologs through make_diploid_walks() + simulate_walks(), but it
+#' takes the already-prepared tile table from prep_for_sim() and computes the
+#' diploid signal directly in reference coordinates.  Using the tumor simulation
+#' tiling makes the normal and tumor data.tables directly combinable by pixel id.
 #'
-#' @param graph optional gGraph whose node boundaries should be imposed on the diploid reference
-#' @param chromosomes chromosomes to include in the diploid reference
-#' @return gGraph with node copy number 2 spanning the selected whole genome
-make_diploid_walks <- function(graph=NULL,chromosomes=c(1:22,'X','Y')){
-    wholegenome = si2gr(hg_seqlengths(chr=FALSE)) %Q% (seqnames %in% chromosomes)
-    nodesgr = wholegenome[,c()]
-    if (!is.null(graph)){
-        graph.nodes = graph$gr[,c()]
-        graph.nodes = graph.nodes[strand(graph.nodes)=='+']
-        if (any(grepl('^chr',as.character(seqnames(graph.nodes))))){
-            wholegenome = gr.chr(wholegenome)
+#' @param tiled.target data.table produced by prep_for_sim(), containing at least start, end, seqnames, width, and tile.id columns
+#' @param if.comps boolean setting whether or not to simulate compartments (currently unsupported)
+#' @param depth depth multiplier, matching simulate_walks()
+#' @param model sets whether to simulate Hi-C (model = 0) or long-read data (model = read length in bp)
+#' @param if.interchr boolean, whether to add the same interchromosomal/background term as calculate_interchrom()
+#' @param gm.out boolean, chooses whether to return a gMatrix or a list with gr/dat data.tables
+#' @return either a gMatrix or a list with tiled target and contact data.table
+simulate_diploid_map = function(tiled.target,if.comps=FALSE,depth=1,model=0,if.interchr=TRUE,gm.out=TRUE){
+    if (missing(tiled.target) || is.null(tiled.target)){
+        stop('tiled.target must be supplied for direct diploid simulation')
+    }
+    if (if.comps){
+        stop('Compartments not supported in direct diploid simulation')
+    }
+    tiled.target = data.table::copy(as.data.table(tiled.target))
+    required.cols = c('start','end','seqnames','width')
+    if (!all(required.cols %in% colnames(tiled.target))){
+        stop('tiled.target must contain start, end, seqnames, and width columns')
+    }
+    if (!'tile.id' %in% colnames(tiled.target)){
+        tiled.target[,tile.id:=.I]
+    }
+    tiled.target[,cn:=2]
+    tiled.target[,compartment:='A']
+
+    out.dat = as.data.table(make_template_dat_cpp(tiled.target))
+    tiled.target[,mid:=(start+end)/2]
+    out.dat[,same_chrom:=tiled.target$seqnames[i]==tiled.target$seqnames[j]]
+    out.dat[,dist:=abs(tiled.target$mid[j]-tiled.target$mid[i])]
+
+    if (model == 0){
+        maxval = 1e8
+        maxval_density = exp(fastKar::splineobj$distance_spline(log(maxval)))
+        out.dat[same_chrom & dist>0,value:=2*widthprod*exp(fastKar::splineobj$distance_spline(log(dist)))]
+        out.dat[same_chrom & dist==0,value:=2*exp(fastKar::splineobj$diag_spline(log(widthprod)))]
+        out.dat[same_chrom & dist>maxval,value:=2*widthprod*maxval_density*maxval/dist]
+        if (if.interchr){
+            raw_density = fastKar::interchrom_density
+            out.dat[,value:=value + widthprod*raw_density*4]
         }
-        nodesgr = gr.disjoin(c(wholegenome[,c()],graph.nodes[,c()]))
+    } else{
+        min.res = min(fastKar::small_lookup[d>0]$d)
+        out.dat[same_chrom,value:=2*widthprod/(10*min.res^2)*(exp(-dist/model))]
     }
-    nodesdt = gr2dt(nodesgr)[,.(seqnames,start,end,cn=2)]
-    setorder(nodesdt,seqnames,start,end)
-    nodesdt[,node.id:=.I]
-    nodesgr = dt2gr(nodesdt,seqlengths=seqlengths(wholegenome))
-    edges = nodesdt[,.(n1=head(node.id,-1),n2=tail(node.id,-1)),by=seqnames]
-    if (nrow(edges)){
-        edges[,`:=`(n1.side='right',n2.side='left',type='REF',cn=2)]
-    }else{
-        edges = data.table(n1=integer(),n2=integer(),n1.side=character(),n2.side=character(),type=character(),cn=numeric())
+    out.dat[is.na(value),value:=0]
+    out.dat[,value:=depth*value]
+    out.dat = out.dat[,.(i,j,id,value)]
+    tiled.target[,mid:=NULL]
+
+    if (gm.out){
+        return(gM(gr=dt2gr(tiled.target),dat=out.dat))
+    } else{
+        return(list(gr=tiled.target,dat=out.dat))
     }
-    out = loosefix(gG(nodes=nodesgr,edges=edges))
-    sample.gwalks(out,1,verbose=F)[[1]]
 }

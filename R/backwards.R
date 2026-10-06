@@ -1,4 +1,4 @@
-prep_data_for_py <- function(gg,gm,depth,pix.size=1e5,target_region=NULL,write.to.folder=NULL){ 
+prep_data_for_py <- function(gg,gm,depth,purity=1,pix.size=1e5,target_region=NULL,write.to.folder=NULL){ 
   if (is.null(target_region)){
     target_region = gg$footprint
   }
@@ -58,7 +58,7 @@ prep_data_for_py <- function(gg,gm,depth,pix.size=1e5,target_region=NULL,write.t
   gm_rebin = gm$disjoin(tiled.target)$agg(tiled.target)
   
   # put in a named list and write to files for Python to read
-  data.out = list(tiled_target = gr2dt(tiled.target),dedup_tiles = dedup.tiles, nodes = dedup.nodes, internal_edges = internal_edges, external_edges = external_edges,gm_dat = gm_rebin$dat,depth=depth)
+  data.out = list(tiled_target = gr2dt(tiled.target),dedup_tiles = dedup.tiles, nodes = dedup.nodes, internal_edges = internal_edges, external_edges = external_edges,gm_dat = gm_rebin$dat,depth=depth,purity=purity)
   if (!is.null(write.to.folder)){
     lapply(1:length(data.out),function(i){
       thisname = names(data.out)[i]
@@ -69,9 +69,6 @@ prep_data_for_py <- function(gg,gm,depth,pix.size=1e5,target_region=NULL,write.t
 }
 
 bestfit_search = function(graph,hic,nsample,depth,pix.size=NULL,target_region=NULL,topk=1,mc.cores=1,keep.circular=T,purity=1){
-	if (!is.numeric(purity) || length(purity) != 1 || is.na(purity) || purity < 0 || purity > 1){
-		stop('purity must be a single numeric value between 0 and 1')
-	}
 	if (is.null(target_region)){
 		target_region = graph$footprint
 	}

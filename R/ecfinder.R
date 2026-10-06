@@ -1,7 +1,4 @@
 fastKar_ecfinder = function(gg,ft,hic.res,true_hic_path,ec_fraction_threshold = 0.6,n_sample=100,n_ec = 10,figure_path = NULL,mc.cores=1,return_all=F,purity=1){
-	if (!is.numeric(purity) || length(purity) != 1 || is.na(purity) || purity < 0 || purity > 1){
-		stop('purity must be a single numeric value between 0 and 1')
-	}
 	library(ggforce)
 	wholegenome = si2gr(hg_seqlengths(chr=FALSE)) %Q% (seqnames %in% c(1:22,'X','Y'))
 	if (is(ft,'character')){ft = streduce(parse.gr(ft))}
