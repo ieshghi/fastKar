@@ -70,8 +70,9 @@ prep_for_sim = function(walks,target_region=NULL,pix.size=1e5,if.comps=F){
     #If target_region extends outside the supplied graph, keep those extra tiles with
     #node.id = NA and tumor cn = 0 so a diploid normal component can still be simulated
     #on the full requested region without rebinning.
-    nodes.in.target = nodesgr %&% target_region
-    outside.target = GenomicRanges::setdiff(target_region,GenomicRanges::reduce(nodes.in.target),ignore.strand=TRUE)
+    nodes.in.target = streduce(nodesgr %&% target_region)
+    merged = gr.merge(nodes.in.target,target_region[,c()],all=T)
+    outside.target = streduce(merged[is.na(merged$query.id)])
     tiled.parts = list()
     if (length(nodes.in.target)){
         tiled.parts[[length(tiled.parts)+1]] = gr2dt(gr.merge(gr.tile(target_region,pix.size),nodesgr))[,.(start,end,seqnames,width,node.id,cn)]

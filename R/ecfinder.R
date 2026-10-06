@@ -225,7 +225,11 @@ boil_greedy = function(gg,ft,N,n_solns_try=1,mc.cores=1){
 		rest.gw = sample.gwalks(loosefix(gg.cur),1,verbose=F)[[1]]
 		return(c(gW(graph=gg,snode.id=rest.gw$snode.id,circular=rest.gw$circular),peeled_gw))
 	}
-	output = mclapply(1:n_solns_try,function(x){greedypeel(gg,circles,deterministic=n_solns_try==1)},mc.cores=mc.cores)
+	output = greedypeel(gg,circles,deterministic=T)
+	if (n_solns_try>1){
+		output_rand = mclapply(1:n_solns_try,function(x){greedypeel(gg,circles,deterministic=F)},mc.cores=mc.cores)
+		output = c(list(output),output_rand)
+	}
 	return(output[!duplicated(unlist(lapply(output,'[[','hash')))])
 }
 
