@@ -15,40 +15,24 @@
 #' @param gm.out boolean, chooses whether to return a gMatrix or a data.table (defaults to TRUE, returning a gMatrtix)
 #' @return either a gMatrix (gm.out = if.sum = T), a list of gMatrices (gm.out = T, if.sum = F), a data.table (gm.out = F, if.sum = T), or a list of data.tables (gm.out = if.sum = F)
 forward_simulate <- function(walks,target_region = NULL,pix.size=1e5,if.comps=FALSE,mc.cores=1,if.sum=TRUE,depth=1,purity=1,model=0,if.interchr=T,gm.out=T){
+    if (!is.numeric(purity) || length(purity) != 1 || is.na(purity) || purity < 0 || purity > 1){
+        stop('purity must be a single numeric value between 0 and 1')
+    }
+    if (purity < 1 && !if.sum){
+        stop('purity < 1 is currently supported only when if.sum = TRUE')
+    }
     prepped.data = prep_for_sim(walks,target_region,pix.size,if.comps)
     haploid.depth = depth/2
     if (purity == 1){
         return(simulate_walks(walks,prepped.data$tiled.target,prepped.data$widthdt,if.comps,mc.cores,if.sum,haploid.depth,model,if.interchr,gm.out))
     }
-    tumor.sim = simulate_walks(walks,prepped.data$tiled.target,prepped.data$widthdt,if.comps,mc.cores,TRUE,haploid.depth*purity,model,if.interchr,F)
-    diploid.walks = make_diploid_walks(walks,prepped.data$tiled.target)
-    normal.sim = simulate_walks(diploid.walks,prepped.data$tiled.target[,cn:=2],prepped.data$widthdt,if.comps,mc.cores,TRUE,haploid.depth*(1-purity),model,if.interchr,F)
-    combined.dat = data.table::copy(tumor.sim$dat)
-    combined.dat[normal.sim$dat,on=.(id),value:=value+i.value]
-    if (gm.out){
-        return(gM(gr=dt2gr(prepped.data$tiled.target),dat=combined.dat))
-    } else{
-        return(list(gr=prepped.data$tiled.target,dat=combined.dat))
-    }
+    tumor.sim = simulate_walks(walks,prepped.data$tiled.target,prepped.data$widthdt,if.comps,mc.cores,TRUE,haploid.depth*purity,model,if.interchr,T)
+    diploid.walks = make_diploid_walks(walks$graph)
+    normal.prepped = prep_for_sim(diploid.walks,target_region,pix.size,if.comps)
+    normal.sim = simulate_walks(diploid.walks,normal.prepped$tiled.target,normal.prepped$widthdt,if.comps,mc.cores,TRUE,haploid.depth*(1-purity),model,if.interchr,T)
+    return(normal.sim + tumor.sim)
 }
 
-make_diploid_walks <- function(walks,tiled.target){
-    nodesgr = walks$graph$gr[,c('node.id','cn')]
-    nodesgr = nodesgr[strand(nodesgr)=='+']
-    nodesdt = gr2dt(nodesgr)[,.(seqnames,start,end,node.id)]
-    target.nodes = unique(tiled.target$node.id[!is.na(tiled.target$node.id)])
-    targetdt = nodesdt[node.id %in% target.nodes]
-    if (!nrow(targetdt)){
-        stop('Cannot construct diploid walks: no target nodes overlap the input graph')
-    }
-    context.spans = targetdt[,.(context.start=min(start),context.end=max(end)),by=seqnames]
-    nodesdt = merge.data.table(nodesdt,context.spans,by='seqnames',all=FALSE,sort=FALSE)
-    nodesdt = nodesdt[start <= context.end & end >= context.start]
-    setorder(nodesdt,seqnames,start,end)
-    snode.id = split(nodesdt$node.id,nodesdt$seqnames)
-    snode.id = unname(lapply(snode.id,as.integer))
-    list(graph=walks$graph,snode.id=snode.id,circular=rep(FALSE,length(snode.id)),dt=data.table(cn=rep(2,length(snode.id))))
-}
 
 #' Tile target region and prepare data necessary for Hi-C simulation. 
 #'
@@ -330,4 +314,38 @@ symmetrize <- function(input.mat){
     output.mat = input.mat + Matrix::t(input.mat)
     Matrix::diag(output.mat) = Matrix::diag(input.mat)
     return(output.mat)
+}
+
+#' Construct a diploid reference gGraph over the whole genome
+#'
+#' Builds a reference-like graph with copy-number 2 over chromosomes 1:22, X, Y.
+#' If a graph is supplied, the whole genome is disjoined against the graph nodes so
+#' normal-reference nodes respect the same breakpoints as the tumor graph.
+#'
+#' @param graph optional gGraph whose node boundaries should be imposed on the diploid reference
+#' @param chromosomes chromosomes to include in the diploid reference
+#' @return gGraph with node copy number 2 spanning the selected whole genome
+make_diploid_walks <- function(graph=NULL,chromosomes=c(1:22,'X','Y')){
+    wholegenome = si2gr(hg_seqlengths(chr=FALSE)) %Q% (seqnames %in% chromosomes)
+    nodesgr = wholegenome[,c()]
+    if (!is.null(graph)){
+        graph.nodes = graph$gr[,c()]
+        graph.nodes = graph.nodes[strand(graph.nodes)=='+']
+        if (any(grepl('^chr',as.character(seqnames(graph.nodes))))){
+            wholegenome = gr.chr(wholegenome)
+        }
+        nodesgr = gr.disjoin(c(wholegenome[,c()],graph.nodes[,c()]))
+    }
+    nodesdt = gr2dt(nodesgr)[,.(seqnames,start,end,cn=2)]
+    setorder(nodesdt,seqnames,start,end)
+    nodesdt[,node.id:=.I]
+    nodesgr = dt2gr(nodesdt,seqlengths=seqlengths(wholegenome))
+    edges = nodesdt[,.(n1=head(node.id,-1),n2=tail(node.id,-1)),by=seqnames]
+    if (nrow(edges)){
+        edges[,`:=`(n1.side='right',n2.side='left',type='REF',cn=2)]
+    }else{
+        edges = data.table(n1=integer(),n2=integer(),n1.side=character(),n2.side=character(),type=character(),cn=numeric())
+    }
+    out = loosefix(gG(nodes=nodesgr,edges=edges))
+    sample.gwalks(out,1,verbose=F)[[1]]
 }
