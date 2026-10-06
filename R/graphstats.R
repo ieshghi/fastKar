@@ -574,8 +574,8 @@ get_dists = function(gw,graph=NULL,target_region=NULL,pix.size=0,readL=0,edit_th
 # does something similar to walks() but only returns linear walks on a given graph by sampling and keeping only unique walks. Doesn't return linear walks that exist on no possible decomposition, unlike walks()
 get_unique_walks = function(gg,N=1,mode = c('all','lin','circular'),frozen.nodes = NULL,mc.cores=1){
         walksets = sample.gwalks(gg,N,mc.cores=mc.cores,frozen.nodes = frozen.nodes,verbose=F,return.gw=F)
-	snodeslist = unlist(mclapply(walksets,function(gw){gw$snode.id},mc.cores=mc.cores),recursive=F)
-	circlist = unlist(mclapply(walksets,function(gw){gw$circular},mc.cores=mc.cores))
+	snodeslist = unlist(lapply(walksets,'[[','snode.id'),recursive=F)
+	circlist = unname(unlist(lapply(walksets,'[[','circular')))
 	if (mode=='lin'){
 		keep = circlist==F
 	}else if(mode=='circular'){
@@ -585,16 +585,14 @@ get_unique_walks = function(gg,N=1,mode = c('all','lin','circular'),frozen.nodes
 	}
 	snodeslist = snodeslist[keep]
 	circlist = circlist[keep]
-	all_walks = gW(graph=gg,snode.id=snodeslist,circular=circlist)
-	if (mode=='lin'){
-		all_walks = all_walks[all_walks$dt$circular==F]
-	}else if(mode=='circular'){
-		all_walks = all_walks[all_walks$dt$circular==T]
+	if (length(snodeslist)){
+		hashvec = unlist(mclapply(1:length(circlist),function(x){hash_karyotype_cpp(snodeslist[x],circlist[x])},mc.cores=mc.cores))
+		unq = which(!duplicated(hashvec))
+		all_walks = gW(graph=gg,snode.id=snodeslist[unq],circular=circlist[unq])
+		return(all_walks)
+	}else{
+		return(gW())
 	}
-	hashvec = unlist(mclapply(1:length(circlist),function(x){hash_karyotype_cpp(snodeslist[x],circlist[x])},mc.cores=mc.cores))
-	#hashvec = unlist(lapply(1:length(all_walks),function(i){all_walks[i]$hash}))
-	all_hashes = data.table(hash=hashvec)[,idx:=.I][,instance:=1:.N,by=hash]
-	return(all_walks[all_hashes[instance==1]$idx])
 }
 
 get_all_pair_distances = function(gw,depth,pix.size,mc.cores=1){

@@ -12,6 +12,7 @@ forward_simulate(
   mc.cores = 1,
   if.sum = TRUE,
   depth = 1,
+  purity = 1,
   model = 0,
   if.interchr = T,
   gm.out = T
@@ -31,6 +32,8 @@ forward_simulate(
 \item{if.sum}{boolean deciding whether to sum the simulated Hi-C signal from all walks or whether to return a list of Hi-C maps (defaults to TRUE)}
 
 \item{depth}{depth of the simulated Hi-C data, in X coverage (defaults to 1)}
+
+\item{purity}{tumor purity/fraction of the sample explained by the supplied walks (defaults to 1). If less than 1, the remaining fraction is simulated as a diploid reference genome over the same context and added to the tumor simulation.}
 
 \item{model}{sets whether to simulate Hi-C (model = 0) or long-read data (model = length of reads in bp)}
 

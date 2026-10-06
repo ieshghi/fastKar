@@ -9,14 +9,45 @@
 #' @param mc.cores number of cores to use in parallel simulation (defaults to 1)
 #' @param if.sum boolean deciding whether to sum the simulated Hi-C signal from all walks or whether to return a list of Hi-C maps (defaults to TRUE)
 #' @param depth depth of the simulated Hi-C data, in X coverage (defaults to 1)
+#' @param purity tumor purity/fraction of the sample explained by the supplied walks (defaults to 1). If less than 1, the remaining fraction is simulated as a diploid reference genome over the same context and added to the tumor simulation.
 #' @param model sets whether to simulate Hi-C (model = 0) or long-read data (model = length of reads in bp)
 #' @param if.interchr boolean, sets whether to simulate interchromosomal contacts (default is TRUE). If if.sum = FALSE, then this is set to FALSE. 
 #' @param gm.out boolean, chooses whether to return a gMatrix or a data.table (defaults to TRUE, returning a gMatrtix)
 #' @return either a gMatrix (gm.out = if.sum = T), a list of gMatrices (gm.out = T, if.sum = F), a data.table (gm.out = F, if.sum = T), or a list of data.tables (gm.out = if.sum = F)
-forward_simulate <- function(walks,target_region = NULL,pix.size=1e5,if.comps=FALSE,mc.cores=1,if.sum=TRUE,depth=1,model=0,if.interchr=T,gm.out=T){
+forward_simulate <- function(walks,target_region = NULL,pix.size=1e5,if.comps=FALSE,mc.cores=1,if.sum=TRUE,depth=1,purity=1,model=0,if.interchr=T,gm.out=T){
     prepped.data = prep_for_sim(walks,target_region,pix.size,if.comps)
     haploid.depth = depth/2
-    return(simulate_walks(walks,prepped.data$tiled.target,prepped.data$widthdt,if.comps,mc.cores,if.sum,haploid.depth,model,if.interchr,gm.out))
+    if (purity == 1){
+        return(simulate_walks(walks,prepped.data$tiled.target,prepped.data$widthdt,if.comps,mc.cores,if.sum,haploid.depth,model,if.interchr,gm.out))
+    }
+    tumor.sim = simulate_walks(walks,prepped.data$tiled.target,prepped.data$widthdt,if.comps,mc.cores,TRUE,haploid.depth*purity,model,if.interchr,F)
+    diploid.walks = make_diploid_walks(walks,prepped.data$tiled.target)
+    normal.sim = simulate_walks(diploid.walks,prepped.data$tiled.target[,cn:=2],prepped.data$widthdt,if.comps,mc.cores,TRUE,haploid.depth*(1-purity),model,if.interchr,F)
+    combined.dat = data.table::copy(tumor.sim$dat)
+    combined.dat[normal.sim$dat,on=.(id),value:=value+i.value]
+    if (gm.out){
+        return(gM(gr=dt2gr(prepped.data$tiled.target),dat=combined.dat))
+    } else{
+        return(list(gr=prepped.data$tiled.target,dat=combined.dat))
+    }
+}
+
+make_diploid_walks <- function(walks,tiled.target){
+    nodesgr = walks$graph$gr[,c('node.id','cn')]
+    nodesgr = nodesgr[strand(nodesgr)=='+']
+    nodesdt = gr2dt(nodesgr)[,.(seqnames,start,end,node.id)]
+    target.nodes = unique(tiled.target$node.id[!is.na(tiled.target$node.id)])
+    targetdt = nodesdt[node.id %in% target.nodes]
+    if (!nrow(targetdt)){
+        stop('Cannot construct diploid walks: no target nodes overlap the input graph')
+    }
+    context.spans = targetdt[,.(context.start=min(start),context.end=max(end)),by=seqnames]
+    nodesdt = merge.data.table(nodesdt,context.spans,by='seqnames',all=FALSE,sort=FALSE)
+    nodesdt = nodesdt[start <= context.end & end >= context.start]
+    setorder(nodesdt,seqnames,start,end)
+    snode.id = split(nodesdt$node.id,nodesdt$seqnames)
+    snode.id = unname(lapply(snode.id,as.integer))
+    list(graph=walks$graph,snode.id=snode.id,circular=rep(FALSE,length(snode.id)),dt=data.table(cn=rep(2,length(snode.id))))
 }
 
 #' Tile target region and prepare data necessary for Hi-C simulation. 

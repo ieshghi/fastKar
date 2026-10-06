@@ -68,7 +68,10 @@ prep_data_for_py <- function(gg,gm,depth,pix.size=1e5,target_region=NULL,write.t
   return(data.out)
 }
 
-bestfit_search = function(graph,hic,nsample,depth,pix.size=NULL,target_region=NULL,topk=1,mc.cores=1,keep.circular=T){
+bestfit_search = function(graph,hic,nsample,depth,pix.size=NULL,target_region=NULL,topk=1,mc.cores=1,keep.circular=T,purity=1){
+	if (!is.numeric(purity) || length(purity) != 1 || is.na(purity) || purity < 0 || purity > 1){
+		stop('purity must be a single numeric value between 0 and 1')
+	}
 	if (is.null(target_region)){
 		target_region = graph$footprint
 	}
@@ -76,7 +79,7 @@ bestfit_search = function(graph,hic,nsample,depth,pix.size=NULL,target_region=NU
 		pix.size = median(width(hic$gr))
 	}
 	gw = sample.gwalks(graph,nsample,verbose=F,mc.cores=mc.cores,keep.circular=keep.circular)
-	sims = mclapply(gw,function(w){forward_simulate(w,target_region=target_region,pix.size=pix.size,depth=depth)},mc.cores=mc.cores)
+	sims = mclapply(gw,function(w){forward_simulate(w,target_region=target_region,pix.size=pix.size,depth=depth,purity=purity)},mc.cores=mc.cores)
 	ratio = sum(hic$value)/sum(sims[[1]]$value)
 	neglogliks = unlist(mclapply(sims,function(s){compmaps(hic,s*ratio,theta=2,ifsum=T)},mc.cores=mc.cores))
 	if (topk==-1){
@@ -84,5 +87,5 @@ bestfit_search = function(graph,hic,nsample,depth,pix.size=NULL,target_region=NU
 	}else{
 		best = order(neglogliks)[1:topk]
 	}
-	return(list(true_hic = hic,kars=gw[best],nlls=neglogliks[best],sims = sims[best]))
+	return(list(true_hic = hic,kars=gw[best],nlls=neglogliks[best],sims = sims[best],purity=purity))
 }

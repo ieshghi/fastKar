@@ -123,7 +123,7 @@ compmaps = function(map_exp,map_theory,theta=2,ifsum=F,if.diag=T,ifscale=F,mask=
    #dat_theory = merge.data.table(template[,.(i,j,widthprod,id)],map_theory$dat[,.(i,j,value)],all.x=TRUE,by=c('i','j'))
    #dat_exp[is.na(value),value:=0]
    #dat_theory[is.na(value),value:=0]
-   comp_dat = compdats(dat_exp,dat_theory,theta,ifsum=FALSE,if.diag=if.diag,return_kl=return_kl,area0=area0)
+   comp_dat = compdats(map_exp$dat,map_theory$dat,theta,ifsum=FALSE,if.diag=if.diag,return_kl=return_kl,area0=area0)
    if (!is.null(mask)){
        bad.inds = (map_exp$gr %&% mask)$tile.id
        comp_dat[(i %in% bad.inds) & (j %in% bad.inds),value:=0]
@@ -135,8 +135,15 @@ compmaps = function(map_exp,map_theory,theta=2,ifsum=F,if.diag=T,ifscale=F,mask=
    }
 }
 
-estimate.depthratio <- function(filepath,mode='hic',res=1e6,ploidy=2,if.chr=FALSE){ #put here hic data for a whole genome
+estimate.depthratio <- function(filepath,res=1e6,ploidy=2,if.chr=FALSE,purity=1){ #put here hic data for a whole genome
+    if (!is.numeric(purity) || length(purity) != 1 || is.na(purity) || purity < 0 || purity > 1){
+        stop('purity must be a single numeric value between 0 and 1')
+    }
+    if (!is.numeric(ploidy) || length(ploidy) != 1 || is.na(ploidy) || ploidy <= 0){
+        stop('ploidy must be a single positive numeric value')
+    }
     wholegenome = gr.tile(si2gr(hg_seqlengths()[1:24]),res)
+    mode = tools::file_ext(filepath)
     if (if.chr){
         wholegenome = gr.chr(wholegenome)
     }
@@ -146,8 +153,11 @@ estimate.depthratio <- function(filepath,mode='hic',res=1e6,ploidy=2,if.chr=FALS
         depthest.hic = cooler(filepath,res=as.integer(res),gr=wholegenome)
     }else if (mode=='rds'){
         depthest.hic = readRDS(filepath)
+    }else{
+        stop('Unrecognized Hi-C file mode: ',mode)
     }
-    return(depthest.hic$value%>%sum * 300 / 3e9 * 2/ploidy)
+    sample.ploidy = purity*ploidy + (1-purity)*2
+    return(depthest.hic$value%>%sum * 300 / 3e9 * 2/sample.ploidy)
 }
 
 #returns negative log likelihood of test data given true data
