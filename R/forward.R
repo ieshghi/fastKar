@@ -29,7 +29,6 @@ forward_simulate <- function(walks,target_region = NULL,pix.size=1e5,if.comps=FA
     }
     tumor.sim = simulate_walks(walks,prepped.data$tiled.target,prepped.data$widthdt,if.comps,mc.cores,TRUE,haploid.depth*purity,model,if.interchr,F)
     normal.sim = simulate_diploid_map(prepped.data$tiled.target,if.comps=if.comps,depth=haploid.depth*(1-purity),model=model,if.interchr=if.interchr,gm.out=F)
-
     combined.dat = merge.data.table(normal.sim$dat[,.(i,j,id,value)],
 				    tumor.sim$dat[,.(id,value)],
 				    by='id',all=TRUE,suffixes=c('.normal','.tumor'))
