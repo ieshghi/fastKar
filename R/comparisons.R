@@ -86,7 +86,7 @@ liktest_separable_lr = function(gwa,gwb,readL,depth=1,nsamp = 20,mc.cores=1,back
 }
 
 liktest_separable = function(map_a,map_b,theta=2,nsamp = 20,mc.cores=1,error.thresh = NULL){
-	a_samples = ake_noisydat(map_a,nsamp=nsamp,theta=theta)
+	a_samples = make_noisydat(map_a,nsamp=nsamp,theta=theta)
 	b_samples = make_noisydat(map_b,nsamp=nsamp,theta=theta)
 	#c,maskzeros=Tompmaps is the negative log likelihood
 	loglikratio = function(sample){-compdats(sample,map_a$dat)+compdats(sample,map_b$dat)}
