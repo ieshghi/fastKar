@@ -604,7 +604,9 @@ alignscore_compl = function(x,y,gp){
 split_walk_fragments = function(nodelist,circ,penalty,left.in,right.in){
 	exit.in = function(s) ifelse(s > 0, right.in[abs(s)], left.in[abs(s)])
 	entry.in = function(s) ifelse(s > 0, left.in[abs(s)], right.in[abs(s)])
-	out = list()
+	## pieces of each walk are collected per walk and concatenated once at the end (the reference
+	## grew `out = c(out, pieces)` inside the loop, quadratic in the number of walks)
+	res = vector('list', length(nodelist))
 	for (k in seq_along(nodelist)){
 		v = nodelist[[k]]
 		idx = which(penalty[abs(v)] != 0)
@@ -619,9 +621,10 @@ split_walk_fragments = function(nodelist,circ,penalty,left.in,right.in){
 			pieces[[1]] = c(pieces[[np]], pieces[[1]])
 			pieces = pieces[-np]
 		}
-		out = c(out, pieces)
+		res[[k]] = pieces
 	}
-	out
+	out = unlist(res, recursive = FALSE, use.names = FALSE)
+	if (is.null(out)) list() else out
 }
 
 ## node.widths: optional per-node weights (named by node.id) replacing node widths;
@@ -637,6 +640,15 @@ edit_dist_cpp = function(gwx,gwy,graph=NULL,return_all = F,constpenalty=F,use.no
 			error('Must provide a graph object or have a graph as an element of gwx')
 		}
 	}
+	penalty = .edit_penalty(graph,constpenalty=constpenalty,use.nodes=use.nodes,node.widths=node.widths)
+	sx = sort_snodes(gwx$snode.id,gwx$circular)
+	sy = sort_snodes(gwy$snode.id,gwy$circular)
+	.edit_pair(.edit_pieces(sx,penalty,split.ends),.edit_pieces(sy,penalty,split.ends),penalty,return_all)
+}
+
+## edit_dist_cpp in three steps, so callers comparing many walks (get_dists) can sort each walk
+## once. Same code as the reference body, split at the walk-independent / per-walk boundaries.
+.edit_penalty = function(graph,constpenalty=F,use.nodes=NULL,node.widths=NULL){
 	nodedt = graph$nodes$dt[,.(width,node.id)]
 	if (!is.null(node.widths)){
 		w = node.widths[as.character(nodedt$node.id)]
@@ -655,22 +667,25 @@ edit_dist_cpp = function(gwx,gwy,graph=NULL,return_all = F,constpenalty=F,use.no
 	}else{
 		penalty[abs(ids)] = -widthvec
 	}
-	sx = sort_snodes(gwx$snode.id,gwx$circular)
-	sy = sort_snodes(gwy$snode.id,gwy$circular)
+	penalty
+}
+## sorted walks (sort_snodes output) -> the pieces that are aligned
+.edit_pieces = function(sx,penalty,split.ends=NULL){
 	if (!is.null(split.ends)){
+		max_id = length(penalty)
 		left.in = right.in = logical(max_id)
 		left.in[as.integer(names(split.ends$left))] = split.ends$left
 		right.in[as.integer(names(split.ends$right))] = split.ends$right
-		sn_x = split_walk_fragments(sx$nodelist,sx$circ,penalty,left.in,right.in)
-		sn_y = split_walk_fragments(sy$nodelist,sy$circ,penalty,left.in,right.in)
+		split_walk_fragments(sx$nodelist,sx$circ,penalty,left.in,right.in)
 	}else{
 		## Nodes with zero edit penalty cannot affect alignment scores.  In
 		## footprint-local comparisons on full graphs, most nodes are often outside
 		## use.nodes and have zero penalty, so strip them before the pairwise DP cost
 		## matrix calculation.
-		sn_x = lapply(sx$nodelist,function(x){x[penalty[abs(x)]!=0]})
-		sn_y = lapply(sy$nodelist,function(x){x[penalty[abs(x)]!=0]})
+		lapply(sx$nodelist,function(x){x[penalty[abs(x)]!=0]})
 	}
+}
+.edit_pair = function(sn_x,sn_y,penalty,return_all=F){
 	n = length(sn_x)
 	m = length(sn_y)
 	if (n<m){
