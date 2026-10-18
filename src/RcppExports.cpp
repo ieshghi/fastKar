@@ -23,6 +23,57 @@ BEGIN_RCPP
     return rcpp_result_gen;
 END_RCPP
 }
+// cmp_template_match
+bool cmp_template_match(SEXP i, SEXP j, SEXP id, int n);
+RcppExport SEXP _fastKarOptim_cmp_template_match(SEXP iSEXP, SEXP jSEXP, SEXP idSEXP, SEXP nSEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    Rcpp::traits::input_parameter< SEXP >::type i(iSEXP);
+    Rcpp::traits::input_parameter< SEXP >::type j(jSEXP);
+    Rcpp::traits::input_parameter< SEXP >::type id(idSEXP);
+    Rcpp::traits::input_parameter< int >::type n(nSEXP);
+    rcpp_result_gen = Rcpp::wrap(cmp_template_match(i, j, id, n));
+    return rcpp_result_gen;
+END_RCPP
+}
+// cmp_template_cols
+List cmp_template_cols(NumericVector widths, bool with_widthprod);
+RcppExport SEXP _fastKarOptim_cmp_template_cols(SEXP widthsSEXP, SEXP with_widthprodSEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    Rcpp::traits::input_parameter< NumericVector >::type widths(widthsSEXP);
+    Rcpp::traits::input_parameter< bool >::type with_widthprod(with_widthprodSEXP);
+    rcpp_result_gen = Rcpp::wrap(cmp_template_cols(widths, with_widthprod));
+    return rcpp_result_gen;
+END_RCPP
+}
+// cmp_pix_index
+IntegerVector cmp_pix_index(IntegerVector i, IntegerVector j, int n);
+RcppExport SEXP _fastKarOptim_cmp_pix_index(SEXP iSEXP, SEXP jSEXP, SEXP nSEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    Rcpp::traits::input_parameter< IntegerVector >::type i(iSEXP);
+    Rcpp::traits::input_parameter< IntegerVector >::type j(jSEXP);
+    Rcpp::traits::input_parameter< int >::type n(nSEXP);
+    rcpp_result_gen = Rcpp::wrap(cmp_pix_index(i, j, n));
+    return rcpp_result_gen;
+END_RCPP
+}
+// cmp_tile_cov
+NumericVector cmp_tile_cov(NumericVector v, int n);
+RcppExport SEXP _fastKarOptim_cmp_tile_cov(SEXP vSEXP, SEXP nSEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    Rcpp::traits::input_parameter< NumericVector >::type v(vSEXP);
+    Rcpp::traits::input_parameter< int >::type n(nSEXP);
+    rcpp_result_gen = Rcpp::wrap(cmp_tile_cov(v, n));
+    return rcpp_result_gen;
+END_RCPP
+}
 // count_kmers_cpp
 DataFrame count_kmers_cpp(List snode_ids, LogicalVector circular, int k);
 RcppExport SEXP _fastKarOptim_count_kmers_cpp(SEXP snode_idsSEXP, SEXP circularSEXP, SEXP kSEXP) {
@@ -100,6 +151,10 @@ END_RCPP
 
 static const R_CallMethodDef CallEntries[] = {
     {"_fastKarOptim_compute_cost_matrix_cpp", (DL_FUNC) &_fastKarOptim_compute_cost_matrix_cpp, 3},
+    {"_fastKarOptim_cmp_template_match", (DL_FUNC) &_fastKarOptim_cmp_template_match, 4},
+    {"_fastKarOptim_cmp_template_cols", (DL_FUNC) &_fastKarOptim_cmp_template_cols, 2},
+    {"_fastKarOptim_cmp_pix_index", (DL_FUNC) &_fastKarOptim_cmp_pix_index, 3},
+    {"_fastKarOptim_cmp_tile_cov", (DL_FUNC) &_fastKarOptim_cmp_tile_cov, 2},
     {"_fastKarOptim_count_kmers_cpp", (DL_FUNC) &_fastKarOptim_count_kmers_cpp, 3},
     {"_fastKarOptim_sort_snodes_cpp", (DL_FUNC) &_fastKarOptim_sort_snodes_cpp, 2},
     {"_fastKarOptim_hash_karyotype_cpp", (DL_FUNC) &_fastKarOptim_hash_karyotype_cpp, 2},
