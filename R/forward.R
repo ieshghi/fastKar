@@ -29,12 +29,19 @@ forward_simulate <- function(walks,target_region = NULL,pix.size=1e5,if.comps=FA
     }
     tumor.sim = simulate_walks(walks,prepped.data$tiled.target,prepped.data$widthdt,if.comps,mc.cores,TRUE,haploid.depth*purity,model,if.interchr,F)
     normal.sim = simulate_diploid_map(prepped.data$tiled.target,if.comps=if.comps,depth=haploid.depth*(1-purity),model=model,if.interchr=if.interchr,gm.out=F)
-    combined.dat = merge.data.table(normal.sim$dat[,.(i,j,id,value)],
-				    tumor.sim$dat[,.(id,value)],
-				    by='id',all=TRUE,suffixes=c('.normal','.tumor'))
-    combined.dat[is.na(value.normal),normal.value:=0]
-    combined.dat[is.na(value.tumor),value.tumor:=0]
-    combined.dat = combined.dat[,.(i,j,id,value=value.normal+value.tumor)]
+    if (identical(normal.sim$dat$id, tumor.sim$dat$id) && !is.unsorted(tumor.sim$dat$id, strictly = TRUE)){
+        # both maps on the same template, in pixel id order: add the value vectors
+        combined.dat = normal.sim$dat[,.(i,j,id)]
+        combined.dat[,value:=normal.sim$dat$value + tumor.sim$dat$value]
+        setattr(combined.dat,'sorted','id')
+    } else{
+        combined.dat = merge.data.table(normal.sim$dat[,.(i,j,id,value)],
+                                        tumor.sim$dat[,.(id,value)],
+                                        by='id',all=TRUE,suffixes=c('.normal','.tumor'))
+        combined.dat[is.na(value.normal),normal.value:=0]
+        combined.dat[is.na(value.tumor),value.tumor:=0]
+        combined.dat = combined.dat[,.(i,j,id,value=value.normal+value.tumor)]
+    }
     if (gm.out){
         return(gM(gr=dt2gr(prepped.data$tiled.target),dat=combined.dat))
     } else{
@@ -114,101 +121,125 @@ prep_for_sim = function(walks,target_region=NULL,pix.size=1e5,if.comps=F){
 simulate_walks <- function(walks,tiled.target,widthdt,if.comps=F,mc.cores=1,if.sum=T,depth=1,model=0,if.interchr=T,gm.out=T){
     # walks is either a gWalk object or a list with elements: snode.id, circular
     # tiled.target is a gr2dt with metadata columns of tile.id, node.id, and cn
-
-    # subset to walks that hit target region
-    hit_target = unlist(lapply(walks$snode.id,function(w){length(intersect(unique(abs(w)),tiled.target$node.id)) > 0}))
-    input_walks = list(graph = walks$graph,snode.id = walks$snode.id[hit_target], circular = walks$circular[hit_target])
-    #then, check for walk CN and if not provided, assume all 1s
-    if(is.null(walks$dt$cn)){
-        walk.cn = rep(1,length(input_walks$snode.id))
-    } else{
-        walk.cn = walks$dt$cn[hit_target]
+    # mc.cores is accepted for compatibility; the C++ kernel is single-threaded and results do not depend on it.
+    if (if.comps){
+        stop('Compartments not supported in this version')
     }
-    target.dat = as.data.table(make_template_dat_cpp(tiled.target)) #useful to make a data.table for all the gMatrices going forward, this is defined on the tiling of the target so that we know exactly what the outputs will look like. Using a single "ID" column to refer to the pixels accelerates summation further on.
-    setkeyv(target.dat,c('i','j'))
-
-    # use walk snode.id to generate appropriate ordered sequences of tile.ids to be simulated, making sure to flip order where strand is negative
-    walk.dts = mclapply(input_walks$snode.id,function(walk){
-        walk.dt = data.table(node.id=abs(walk),strand=ifelse(sign(walk)==+1,'+','-'))[,order:=.I]
-        walk.dt = merge.data.table(walk.dt,tiled.target,by='node.id',all.x=T,sort=F,allow.cartesian = T)
-        toflip = walk.dt$strand=='-'
-        walk.dt[,step.id:=.I]
-        walk.dt[toflip,step.id:=rev(step.id),by=order]
-        setkeyv(walk.dt,'step.id')
-        walk.dt = merge.data.table(walk.dt,widthdt,by='node.id',all.x=T)
-        walk.dt[is.na(width),width:=nodewidth]
-        walk.dt[,nodewidth:=NULL]
-        # what about when a tile is outside target_region? pull width from nodesgr. OK if compartment is NA, since contacts with that region dont matter
-        id.dt = walk.dt[,.(orig.id=tile.id,compartment,width,step.id)][,tile.id:=step.id][,step.id:=NULL]
-        setkeyv(id.dt,'tile.id')
-        return(id.dt)
-    },mc.cores=mc.cores)
-    #
-    n.ref = nrow(target.dat)
+    snode.id = walks$snode.id
+    # subset to walks that hit target region
+    hit_target = walks_hit_target(snode.id,tiled.target$node.id)
+    if (!any(hit_target)){
+        stop('none of the walks hits the target region')
+    }
+    circular = walks$circular[hit_target]
+    #then, check for walk CN and if not provided, assume all 1s
+    walk.cn.all = walks$dt$cn
+    if(is.null(walk.cn.all)){
+        walk.cn = rep(1,sum(hit_target))
+    } else{
+        walk.cn = walk.cn.all[hit_target]
+    }
+    # every walk as one run of local rows (tiles in walk order, flipped on the minus strand)
+    rows = walk_rows(snode.id[hit_target],tiled.target,widthdt)
+    kern = forward_kernel_args(model)
     n.tiles = nrow(tiled.target)
-    # Each walk's contribution in reference coordinates, as a sparse (pixel id, value) pair of
-    # vectors. The pixel id of reference pixel (i, j), i <= j, is its row in the template.
-    reference.sparse = mclapply(1:length(walk.dts),function(ii){
-        this.dt = data.table::copy(walk.dts[[ii]]) 
-        this.dt[,end:=cumsum(width)] #end coordinates along the allele are just the sum of widths
-        this.dt[,start:=end - width + 1] #start coordinates are the ends minus widths
-        this.dt[,mid:=(start+end)/2]
-        #
-        transfmat.spr = sparseMatrix(i=this.dt[!is.na(orig.id)]$tile.id,j=this.dt[!is.na(orig.id)]$orig.id,x=1,dims=c(nrow(this.dt),nrow(tiled.target))) #this sparse matrix gives us the lift back to reference. Since all bins in liftedwalk are subsets of bins in merwalk, this is just a matrix of ones, but each bin in merwalk can have multiple bins in liftedwalk point to it, so each column can have multiple 1s in it.
-        #
-        local_sim = simulate_map(this.dt,input_walks$circular[ii],model=model) #run the simulator, get a gMatrix in local coordinates
-        if (nrow(local_sim)){
-            #
-            localmat = sparseMatrix(i=local_sim$i,j=local_sim$j,x=local_sim$value) %>% symmetrize #convert to a matrix and symmetrize
-            #
-            refmat = (Matrix::t(transfmat.spr) %*% localmat)%*%transfmat.spr #apply coordinate transformation 
-            #
-            tsparse.ref = as(refmat,'TsparseMatrix')
-            keep = tsparse.ref@i <= tsparse.ref@j # upper triangle, Tsparsematrix is 0-indexed
-            return(list(id = pixel_id(tsparse.ref@i[keep]+1, tsparse.ref@j[keep]+1, n.tiles), value = tsparse.ref@x[keep]))
-        }else{
-            return(list(id = integer(0), value = numeric(0)))
-        }
-    },mc.cores=mc.cores)
-    #
+    walk_acc = function(w, cn){
+        # local rows of walks w (consecutive), walk CNs cn
+        r = seq.int(rows$walk_ptr[w[1]] + 1, length.out = rows$walk_ptr[w[length(w)] + 1] - rows$walk_ptr[w[1]])
+        ptr = as.integer(rows$walk_ptr[c(w, w[length(w)] + 1)] - rows$walk_ptr[w[1]])
+        forward_walks_cpp(ptr, rows$orig[r], rows$width[r], rows$int_width, as.logical(circular[w]), as.numeric(cn), n.tiles,
+                          kern$z, kern$lmin, kern$slope, kern$maxval, kern$maxval_density, kern$model, kern$lr_denom, kern$diagf)
+    }
     if(if.sum){
-        # one accumulator over the template pixels; walk CN multiplies each walk's map
-        acc = numeric(n.ref)
-        for (ii in seq_along(reference.sparse)){
-            rs = reference.sparse[[ii]]
-            acc[rs$id] = acc[rs$id] + walk.cn[ii]*rs$value
-        }
-        if (if.interchr & model==0){
-            total.counts = interchrom_from_acc(target.dat,acc,tiled.target,if.comps=if.comps)
-        }else{
-            total.counts = target.dat[,.(i,j,id)]
-            setattr(total.counts,'sorted',NULL)
-            total.counts[,value:=acc]
+        acc = walk_acc(seq_along(walk.cn), walk.cn)
+        interchr = if.interchr & model==0
+        total.counts = setDT(forward_assemble_cpp(as.numeric(tiled.target$width), as.numeric(tiled.target$cn), acc, depth,
+                                                  fastKarOptim::interchrom_density, interchr))
+        if (interchr){
+            setattr(total.counts,'sorted','id') # calculate_interchrom() returned a table keyed by id
         }
         if (gm.out){
-            return(gM(gr = dt2gr(tiled.target),dat=total.counts[,value:=depth*value]))
+            return(gM(gr = dt2gr(tiled.target),dat=total.counts))
         } else{
-            return(list(gr = tiled.target, dat=total.counts[,value:=depth*value]))
+            return(list(gr = tiled.target, dat=total.counts))
         }
     }else{
-        scaled_out = lapply(seq_along(reference.sparse),function(ii){
-            rs = reference.sparse[[ii]]
+        target.dat = as.data.table(make_template_dat_cpp(tiled.target))
+        setattr(target.dat,'sorted',c('i','j'))
+        if (gm.out){
+            target.gr = dt2gr(tiled.target)
+        }
+        scaled_out = lapply(seq_along(walk.cn),function(ii){
             x = data.table::copy(target.dat)
-            if (length(rs$id)){
-                v = x$value
-                v[rs$id] = walk.cn[ii]*rs$value
-                x[,value:=v]
-            } else{
-                x = x[,.(i,j,id,value,widthprod)] # reference column order for an empty local map
-            }
+            set(x,j='value',value=depth*(walk.cn[ii]*walk_acc(ii, 1)))
             if (gm.out){
-                return(gM(gr=dt2gr(tiled.target),dat=x[,value:=depth*value]))
+                return(gM(gr=target.gr,dat=x))
             } else{
-                return(dat=x[,value:=depth*value])
+                return(x)
             }
         })
         return(scaled_out)
     }
+}
+
+#' Which walks visit at least one node of the target tiling
+#'
+#' @param snode.id list of signed node id vectors
+#' @param target.nodes node.id column of the tiled target (may contain NA)
+#' @return logical vector, one per walk
+walks_hit_target = function(snode.id,target.nodes){
+    lens = base::lengths(snode.id)
+    if (!length(lens)) return(logical(0))
+    flat = abs(unlist(snode.id,use.names=FALSE))
+    hit = flat %in% target.nodes[!is.na(target.nodes)]
+    tabulate(rep.int(seq_along(lens), lens)[hit], nbins = length(lens)) > 0
+}
+
+#' Local rows (tiles in walk order) of a set of walks, as simulate_walks() lays them out
+#'
+#' Each node visit expands into the node's tiles in the target tiling, in tiling order (reversed on
+#' the minus strand), or into one untiled row with the node's full width if the node has no tiles.
+#' @return list(walk_ptr = 0-based row offsets per walk (length W+1), orig = tile.id or NA,
+#'   width = row width (numeric), int_width = whether the reference width column is integer)
+walk_rows = function(snode.id,tiled.target,widthdt){
+    lens = base::lengths(snode.id)
+    flat = unlist(snode.id,use.names=FALSE)
+    v = abs(flat)
+    tt_node = tiled.target$node.id
+    tt_rows = which(!is.na(tt_node))
+    tt_rows = tt_rows[order(tt_node[tt_rows], tt_rows)]
+    rl = rle(tt_node[tt_rows])
+    rl_first = cumsum(c(1L, rl$lengths))[seq_along(rl$values)]
+    mt = match(v, rl$values)
+    ntile = ifelse(is.na(mt), 0L, rl$lengths[mt])
+    nrow_visit = pmax(ntile, 1L)
+    vis = rep.int(seq_along(v), nrow_visit)
+    k = sequence(nrow_visit)
+    minus = flat[vis] < 0
+    k[minus] = nrow_visit[vis[minus]] - k[minus] + 1L
+    tiled = ntile[vis] > 0
+    tile = rep(NA_integer_, length(vis))
+    tile[tiled] = tt_rows[rl_first[mt[vis[tiled]]] + k[tiled] - 1L]
+    width = tiled.target$width[tile]
+    untiled = !tiled
+    nodewidth = widthdt$nodewidth[match(v[vis[untiled]], widthdt$node.id)]
+    width[untiled] = if (is.integer(width)) as.integer(nodewidth) else nodewidth
+    walk_ptr = c(0, cumsum(as.numeric(nrow_visit)))[cumsum(c(0, lens)) + 1]
+    list(walk_ptr = walk_ptr,
+         orig = as.integer(tiled.target$tile.id[tile]),
+         width = as.numeric(width),
+         int_width = is.integer(width))
+}
+
+#' Model constants for the C++ walk kernel, read from the package data at call time
+forward_kernel_args = function(model){
+    f = fastKarOptim::splineobj$distance_spline
+    z = environment(f)$z
+    lmin = z$x[1]
+    list(z = z, lmin = lmin, slope = f(lmin, deriv = 1), maxval = 1e8,
+         maxval_density = distance_density(1e8), model = model,
+         lr_denom = if (model > 0) 10*min(fastKarOptim::small_lookup[d>0]$d)^2 else 1,
+         diagf = fastKarOptim::splineobj$diag_spline)
 }
 
 #' Pixel id of reference pixel (i, j), i <= j, on an n-tile template: its row in make_template_dat()
@@ -219,26 +250,6 @@ simulate_walks <- function(walks,tiled.target,widthdt,if.comps=F,mc.cores=1,if.s
 pixel_id = function(i, j, n){
     i = as.numeric(i); j = as.numeric(j)
     as.integer((i - 1)*n - (i - 1)*(i - 2)/2 + (j - i + 1))
-}
-
-#' Add the one-shot interchromosomal term to an accumulated intrachromosomal map
-#'
-#' Vector form of calculate_interchrom(): value = acc + widthprod * rho * cn_i * cn_j on the template.
-#' @param target.dat template from make_template_dat_cpp(tiled.target), rows in pixel id order
-#' @param acc numeric vector of intrachromosomal contacts per template pixel
-#' @param tiled.target data.table of target tiles (column cn)
-#' @return data.table with columns i,j,id,value, keyed by id (as calculate_interchrom())
-interchrom_from_acc = function(target.dat,acc,tiled.target,if.comps=F){
-    if (if.comps){
-        stop('Compartments not supported in this version')
-    }
-    raw_density = fastKarOptim::interchrom_density
-    cn = tiled.target$cn
-    out = target.dat[,.(i,j,id)]
-    setattr(out,'sorted',NULL)
-    out[,value:=acc + target.dat$widthprod*raw_density*(cn[i]*cn[j])]
-    setkeyv(out,'id')
-    out
 }
 
 #' Hi-C contact density per bp^2 at genomic distance dist (bp), from the Rao 2014 distance spline
@@ -383,31 +394,7 @@ make_template_dat = function(target.bins,if.comps=FALSE){
 	}
 }
 
-#' Rcpp version of make_template_dat(), no compartments for now
-#' 
-#' @param A a data.table corresponding to the target region tiles, with a "width" column giving the size of each tile
-#' @return data.table with columns i,j,id,widthprod corresponding to all pairwise contacts, widthprod is the product of widths of tiles i and j
-cppFunction('DataFrame make_template_dat_cpp(DataFrame A) {
-  NumericVector widths = A["width"];
-  int l = widths.size();
-  std::vector<int> i_vals, j_vals;
-  std::vector<double> widthprod_vals;
-
-  for (int i = 0; i < l; ++i) { // make the combinations where i<=j
-    for (int j = i; j < l; ++j) {
-      i_vals.push_back(i + 1);
-      j_vals.push_back(j + 1);
-      widthprod_vals.push_back(widths[i] * widths[j]);
-    }
-  }
-  return DataFrame::create( //return as a dataframe
-    _["i"] = i_vals,
-    _["j"] = j_vals,
-    _["value"] = NumericVector(i_vals.size(), 0),
-    _["widthprod"] = widthprod_vals,
-    _["id"] = seq(1, i_vals.size())
-  );
-}')
+# make_template_dat_cpp() is compiled with the package (src/forward_kernel.cpp).
 
 #' Symmetrize a matrix
 #' 
@@ -453,29 +440,28 @@ simulate_diploid_map = function(tiled.target,if.comps=FALSE,depth=1,model=0,if.i
     tiled.target[,cn:=2]
     tiled.target[,compartment:='A']
 
-    out.dat = as.data.table(make_template_dat_cpp(tiled.target))
-    tiled.target[,mid:=(start+end)/2]
-    out.dat[,same_chrom:=tiled.target$seqnames[i]==tiled.target$seqnames[j]]
-    out.dat[,dist:=abs(tiled.target$mid[j]-tiled.target$mid[i])]
-
     if (model == 0){
-        maxval = 1e8
-        maxval_density = distance_density(maxval)
-        out.dat[same_chrom & dist>0,value:=2*widthprod*distance_density(dist)]
-        out.dat[same_chrom & dist==0,value:=2*exp(fastKarOptim::splineobj$diag_spline(log(widthprod)))]
-        out.dat[same_chrom & dist>maxval,value:=2*widthprod*maxval_density*maxval/dist]
-        if (if.interchr){
-            raw_density = fastKarOptim::interchrom_density
-            out.dat[,value:=value + widthprod*raw_density*4]
-        }
+        # C++: same-chromosome Hi-C model x 2, interchromosomal term, NA -> 0, depth
+        chrom = match(as.character(tiled.target$seqnames), unique(as.character(tiled.target$seqnames)))
+        chrom[is.na(tiled.target$seqnames)] = NA_integer_
+        kern = forward_kernel_args(0)
+        value = forward_diploid_cpp(as.integer(chrom), as.numeric((tiled.target$start+tiled.target$end)/2), as.numeric(tiled.target$width),
+                                    kern$z, kern$lmin, kern$slope, kern$maxval, kern$maxval_density,
+                                    if.interchr, fastKarOptim::interchrom_density, depth, kern$diagf)
+        out.dat = setDT(forward_assemble_cpp(as.numeric(tiled.target$width), numeric(0), value, 1, 0, FALSE))
     } else{
+        # reference code path (errors: same_chrom is looked up as a variable by data.table)
+        out.dat = as.data.table(make_template_dat_cpp(tiled.target))
+        tiled.target[,mid:=(start+end)/2]
+        out.dat[,same_chrom:=tiled.target$seqnames[i]==tiled.target$seqnames[j]]
+        out.dat[,dist:=abs(tiled.target$mid[j]-tiled.target$mid[i])]
         min.res = min(fastKarOptim::small_lookup[d>0]$d)
         out.dat[same_chrom,value:=2*widthprod/(10*min.res^2)*(exp(-dist/model))]
+        out.dat[is.na(value),value:=0]
+        out.dat[,value:=depth*value]
+        out.dat = out.dat[,.(i,j,id,value)]
+        tiled.target[,mid:=NULL]
     }
-    out.dat[is.na(value),value:=0]
-    out.dat[,value:=depth*value]
-    out.dat = out.dat[,.(i,j,id,value)]
-    tiled.target[,mid:=NULL]
 
     if (gm.out){
         return(gM(gr=dt2gr(tiled.target),dat=out.dat))
