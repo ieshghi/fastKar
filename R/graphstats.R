@@ -442,6 +442,10 @@ to_gwalk = function(walklist,gr,mc.cores=1){
 ## Identical (words, nums and row order) to the reference foverlaps implementation; the sweep is
 ## in reads_fromwalk_cpp (src/graphstats_reads.cpp).
 reads_fromwalk = function(walk,readL,minsize=0,use.nodes=NULL){
+	if (length(.reads_cache$entries)){
+		hit = .reads_cache_get(walk,readL,minsize,use.nodes)
+		if (!is.null(hit)) return(data.table::copy(hit))
+	}
 	gr = walk$graph$gr[,c('node.id')]
 	tinynodes = gr[width(gr) < minsize]$node.id
 	if (!is.null(use.nodes)){
@@ -550,9 +554,13 @@ hic_kl = function(walk_x, walk_y, target_region=NULL, graph=NULL,pix.size=1e6, d
 	if (is.null(target_region)){target_region=graph$footprint}
 	hic_x = forward_simulate(walk_x,target_region = target_region,pix.size=pix.size,depth=depth)
 	hic_y = forward_simulate(walk_y,target_region = target_region,pix.size=pix.size,depth=depth)
-	kl = compmaps(hic_x,hic_y,theta=theta,return_kl=T,area0=pix.size^2,ifsum=T,mask=mask)
+	kl = .hic_kl_maps(hic_x,hic_y,theta=theta,pix.size=pix.size,mask=mask)
 	#kl = kl_nb(hic_x$value,hic_y$value,r=theta)
 	return(kl)
+}
+## the comparison step of hic_kl, on already simulated maps
+.hic_kl_maps = function(hic_x,hic_y,theta=2,pix.size,mask=NULL){
+	compmaps(hic_x,hic_y,theta=theta,return_kl=T,area0=pix.size^2,ifsum=T,mask=mask)
 }
 
 alignscore = function(x,y,gap_penalty=-1){
@@ -700,24 +708,74 @@ edit_dist_cpp = function(gwx,gwy,graph=NULL,return_all = F,constpenalty=F,use.no
 	if (return_all){return(list(assignment,optscores))}else{return(sum(optscores))}
 }
 
+## Scoped cache of reads_fromwalk() results, keyed by the walk object (identical(): for gWalks,
+## the same R6 object) and the arguments. Used by get_dists() so longread_kl() on every pair
+## reuses each walk's reads instead of recomputing them; outside .with_reads_cache() it is empty.
+.reads_cache = new.env(parent = emptyenv())
+.reads_cache_get = function(walk, readL, minsize, use.nodes){
+	for (e in .reads_cache$entries){
+		if (identical(e$walk, walk) && identical(e$readL, readL) && identical(e$minsize, minsize) &&
+		    identical(e$use.nodes, use.nodes)) return(e$reads)
+	}
+	NULL
+}
+.with_reads_cache = function(walks, readL, minsize, use.nodes, expr){
+	old = .reads_cache$entries
+	on.exit(.reads_cache$entries <- old, add = TRUE)
+	.reads_cache$entries = lapply(walks, function(w){
+		list(walk = w, readL = readL, minsize = minsize, use.nodes = use.nodes,
+		     reads = reads_fromwalk(w, readL, minsize = minsize, use.nodes = use.nodes))
+	})
+	expr
+}
+.all_have_graph = function(gw) all(vapply(gw, function(w) !is.null(w$graph), logical(1)))
+
 #just a wrapper function to calculate all distance pairs
 #if you want to skip calculating Hi-C (or long-read) distances, set pix.size=0 (or readL=0).
+## Same columns as the reference, which re-simulated both karyotypes of every pair (n(n-1) calls
+## to forward_simulate) and re-sorted / re-read both walks of every pair. Here, when every walk
+## carries its graph (so hic_kl/longread_kl would not substitute `graph`), each karyotype is
+## simulated once, sorted once and read once, and the pairwise comparisons reuse those.
 get_dists = function(gw,graph=NULL,target_region=NULL,pix.size=0,readL=0,use.nodes=NULL,depth=1,mc.cores=1){
 	if (is.null(target_region)){target_region = gw[[1]]$footprint}
 	comppairs = CJ(i=seq_along(gw),j=seq_along(gw))[i>j]
+	fast = nrow(comppairs) > 0 && .all_have_graph(gw)
 	if (pix.size>0){
+	if (fast){
+		sims = mclapply(seq_along(gw),function(k){
+			forward_simulate(gw[[k]],target_region = target_region,pix.size=pix.size,depth=depth)},mc.cores=mc.cores)
+		hic_dists = unlist(mclapply(1:nrow(comppairs),function(x){
+			.hic_kl_maps(sims[[comppairs$i[x]]],sims[[comppairs$j[x]]],theta=2,pix.size=pix.size)},mc.cores=mc.cores))
+		rm(sims)
+	}else{
 	hic_dists = unlist(mclapply(1:nrow(comppairs),function(x){
 		hic_kl(gw[[comppairs[x]$i]],gw[[comppairs[x]$j]],graph=graph,pix.size=pix.size,depth=depth,theta=2,target_region=target_region)},mc.cores=mc.cores))
+	}
 	comppairs[,hic:=hic_dists]
 	}
+	if (fast){
+		## edit_dist_cpp(gw_i, gw_j, graph): penalty from `graph`, or from gw_i's graph
+		pens = if (!is.null(graph)) rep(list(.edit_penalty(graph,use.nodes=use.nodes)),length(gw)) else
+			lapply(gw,function(w) .edit_penalty(w$graph,use.nodes=use.nodes))
+		sorted = lapply(gw,function(w) sort_snodes(w$snode.id,w$circular))
+		edit_dists = unlist(mclapply(1:nrow(comppairs),function(x){
+			i = comppairs$i[x]; j = comppairs$j[x]; pen = pens[[i]]
+			.edit_pair(.edit_pieces(sorted[[i]],pen),.edit_pieces(sorted[[j]],pen),pen)
+					   },mc.cores=mc.cores))
+	}else{
 	edit_dists = unlist(mclapply(1:nrow(comppairs),function(x){
 		edit_dist_cpp(gw[[comppairs[x]$i]],gw[[comppairs[x]$j]],graph=graph,use.nodes=use.nodes)
 				   },mc.cores=mc.cores))
+	}
 	comppairs[,edit:=edit_dists]
 	if (readL>0){
-	lr_dists = unlist(mclapply(1:nrow(comppairs),function(x){
+	lr_pairs = function(){
+		unlist(mclapply(1:nrow(comppairs),function(x){
 		longread_kl(gw[[comppairs[x]$i]],gw[[comppairs[x]$j]],graph=graph,readL=readL,depth=depth,use.nodes=use.nodes)
 			   },mc.cores=mc.cores))
+	}
+	## longread_kl -> liktest_separable_lr -> longread_probdist -> reads_fromwalk(w, readL, 0, use.nodes)
+	lr_dists = if (fast) .with_reads_cache(gw,readL,0,use.nodes,lr_pairs()) else lr_pairs()
 	comppairs[,longread:=lr_dists]
 	}
 	return(comppairs)
@@ -747,8 +805,24 @@ get_unique_walks = function(gg,N=1,mode = c('all','lin','circular'),frozen.nodes
 	}
 }
 
+## Same values as the reference, which called hic_kl on every pair (target = gw_i's graph
+## footprint). When every walk has a graph and all footprints are identical, each karyotype is
+## simulated once on that footprint and the pairs reuse the maps.
 get_all_pair_distances = function(gw,depth,pix.size,mc.cores=1){
 	comppairs = CJ(i=seq_along(gw),j=seq_along(gw))[i>j]
+	fast = nrow(comppairs) > 0 && .all_have_graph(gw)
+	if (fast){
+		fps = lapply(gw,function(w) w$graph$footprint)
+		fast = all(vapply(fps,identical,logical(1),fps[[1]]))
+	}
+	if (fast){
+		sims = mclapply(seq_along(gw),function(k){
+			forward_simulate(gw[[k]],target_region = fps[[1]],pix.size=pix.size,depth=depth)},mc.cores=mc.cores)
+		hic_dists = unlist(pbmclapply(1:nrow(comppairs),function(x){
+				.hic_kl_maps(sims[[comppairs$i[x]]],sims[[comppairs$j[x]]],theta=2,pix.size=pix.size)
+					   },mc.cores=mc.cores))
+		return(hic_dists)
+	}
 	hic_dists = unlist(pbmclapply(1:nrow(comppairs),function(x){
 			hic_kl(gw[[comppairs[x]$i]],gw[[comppairs[x]$j]],pix.size=pix.size,depth=depth,theta=2)
 				   },mc.cores=mc.cores))
