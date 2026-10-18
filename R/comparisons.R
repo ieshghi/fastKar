@@ -109,7 +109,7 @@
 		meanvals[idx[ok]] = as.double(v[ok])
 	}
 	meanvals[is.na(meanvals)] = 0
-	list(i = tc$i, j = tc$j, widthprod = tc$widthprod, id = seq_len(P), meanvals = meanvals, P = P)
+	list(i = tc$i, j = tc$j, widthprod = tc$widthprod, id = seq_len(P) + 0L, meanvals = meanvals, P = P) # id materialized (not ALTREP)
 }
 
 ## the single vectorized draw of make_noisydat() (same RNG stream)
@@ -465,9 +465,9 @@ make_noisydat = function(map_in,nsamp=1,theta=2){ #samples from negative binomia
     newval = .noisy_draw(prep,nsamp,theta)
     P = prep$P
     out.dats = lapply(seq_len(nsamp),function(k){
-        fresh = function(v){if (k==1) v else copy(v)} #each table owns its columns
-        data.table(i=fresh(prep$i),j=fresh(prep$j),widthprod=fresh(prep$widthprod),id=fresh(prep$id),
-                   value=newval[((k-1)*P+1):(k*P)],map.ids=rep(k,P))
+        fresh = function(v){if (k==1) v else copy(v)} #each table owns its columns (one copy each, no data.table() copies)
+        setDT(list(i=fresh(prep$i),j=fresh(prep$j),widthprod=fresh(prep$widthprod),id=fresh(prep$id),
+                   value=newval[((k-1)*P+1):(k*P)],map.ids=rep(k,P)))
     })
     names(out.dats) = as.character(seq_len(nsamp))
     return(out.dats)
