@@ -5,6 +5,22 @@ compute_cost_matrix_cpp <- function(sn_x, sn_y, penalty) {
     .Call(`_fastKarOptim_compute_cost_matrix_cpp`, sn_x, sn_y, penalty)
 }
 
+cmp_template_match <- function(i, j, id, n) {
+    .Call(`_fastKarOptim_cmp_template_match`, i, j, id, n)
+}
+
+cmp_template_cols <- function(widths, with_widthprod) {
+    .Call(`_fastKarOptim_cmp_template_cols`, widths, with_widthprod)
+}
+
+cmp_pix_index <- function(i, j, n) {
+    .Call(`_fastKarOptim_cmp_pix_index`, i, j, n)
+}
+
+cmp_tile_cov <- function(v, n) {
+    .Call(`_fastKarOptim_cmp_tile_cov`, v, n)
+}
+
 count_kmers_cpp <- function(snode_ids, circular, k) {
     .Call(`_fastKarOptim_count_kmers_cpp`, snode_ids, circular, k)
 }
