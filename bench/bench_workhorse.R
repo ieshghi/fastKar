@@ -97,6 +97,13 @@ benches = list(
         if (length(fx$gw) < 2) return(NULL)
         function() f('longread_kl')(fx$gw[[1]], fx$gw[[2]], readL = pix, depth = 10, use.nodes = NULL)
     }),
+    traverse = list(pix = NA, run = function(f, fx, pix) {
+        w = f('gg.to.wiring')(fx$gg)
+        function() f('traverse_graph_cpp')(w$internal.edges, w$loose.ends)
+    }),
+    sample_neighborhood = list(pix = NA, run = function(f, fx, pix) function() {
+        set.seed(1); f('sample.neighborhood')(fx$gg, 20, return.gw = FALSE)
+    }),
     edit_dist = list(pix = NA, run = function(f, fx, pix) {
         if (length(fx$gw) < 2) return(NULL)
         function() vapply(2:length(fx$gw), function(k) f('edit_dist_cpp')(fx$gw[[1]], fx$gw[[k]]), 1)
