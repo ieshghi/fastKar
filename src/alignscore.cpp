@@ -1,5 +1,6 @@
 #include <Rcpp.h>
 #include <vector>
+#include <map>
 #include <cstdlib>
 using namespace Rcpp;
 
@@ -138,19 +139,38 @@ NumericMatrix compute_cost_matrix_cpp(List sn_x,
   std::vector<Seq> X(dim), Y(dim);
   for (int i = 0; i < n; i++) X[i] = make_seq(sn_x[i], penalty);
   for (int j = 0; j < m; j++) Y[j] = make_seq(sn_y[j], penalty);
-  NumericMatrix costmat(dim, dim);
+  // identical walks give identical rows / columns: score each distinct (x, y) content pair once
+  auto uniq = [](const std::vector<Seq>& V, std::vector<int>& code) {
+    std::map<std::vector<int>, int> seen;
+    std::vector<int> rep;
+    code.resize(V.size());
+    for (size_t i = 0; i < V.size(); i++) {
+      auto it = seen.find(V[i].v);
+      if (it == seen.end()) { seen.emplace(V[i].v, (int)rep.size()); code[i] = (int)rep.size(); rep.push_back((int)i); }
+      else code[i] = it->second;
+    }
+    return rep;
+  };
+  std::vector<int> cx, cy;
+  std::vector<int> rx = uniq(X, cx), ry = uniq(Y, cy);
+  const int ux = (int)rx.size(), uy = (int)ry.size();
+  std::vector<double> U((size_t)ux * uy);
   std::vector<double> prev, curr;
-  for (int i = 0; i < dim; i++) {
-    for (int j = 0; j < dim; j++) {
-      const Seq& yj = Y[j];
-      double s1 = dp_score(X[i], yj.v, yj.g, prev, curr);
+  for (int a = 0; a < ux; a++) {
+    const Seq& xa = X[rx[a]];
+    for (int b = 0; b < uy; b++) {
+      const Seq& yb = Y[ry[b]];
+      double s1 = dp_score(xa, yb.v, yb.g, prev, curr);
       double score = s1;
-      if (!yj.v.empty()) {
-        double s2 = dp_score(X[i], yj.rc, yj.grc, prev, curr);
+      if (!yb.v.empty()) {
+        double s2 = dp_score(xa, yb.rc, yb.grc, prev, curr);
         score = s1 > s2 ? s1 : s2;
       }
-      costmat(i, j) = -score;
+      U[(size_t)a * uy + b] = -score;
     }
   }
+  NumericMatrix costmat(dim, dim);
+  for (int i = 0; i < dim; i++)
+    for (int j = 0; j < dim; j++) costmat(i, j) = U[(size_t)cx[i] * uy + cy[j]];
   return costmat;
 }
