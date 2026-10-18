@@ -116,6 +116,13 @@ benches = list(
         assign('hash_karyotype_cpp', f('hash_karyotype_cpp'), envir = globalenv())
         function() f('group_klcomp')(fx$gw[1:min(4, length(fx$gw))], target_region = fx$ft, hic_resolution = pix, depth = 10)
     }),
+    traverse = list(pix = NA, run = function(f, fx, pix) {
+        w = f('gg.to.wiring')(fx$gg)
+        function() f('traverse_graph_cpp')(w$internal.edges, w$loose.ends)
+    }),
+    sample_neighborhood = list(pix = NA, run = function(f, fx, pix) function() {
+        set.seed(1); f('sample.neighborhood')(fx$gg, 20, return.gw = FALSE)
+    }),
     edit_dist = list(pix = NA, run = function(f, fx, pix) {
         if (length(fx$gw) < 2) return(NULL)
         function() vapply(2:length(fx$gw), function(k) f('edit_dist_cpp')(fx$gw[[1]], fx$gw[[k]]), 1)

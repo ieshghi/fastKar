@@ -25,6 +25,14 @@ count_kmers_cpp <- function(snode_ids, circular, k) {
     .Call(`_fastKarOptim_count_kmers_cpp`, snode_ids, circular, k)
 }
 
+reads_fromwalk_cpp <- function(widths, lens, circular, readL, fwd_tok, rev_tok, keep) {
+    .Call(`_fastKarOptim_reads_fromwalk_cpp`, widths, lens, circular, readL, fwd_tok, rev_tok, keep)
+}
+
+traverse_graph_fast_cpp <- function(n, left, right, id, loose_ends) {
+    .Call(`_fastKarOptim_traverse_graph_fast_cpp`, n, left, right, id, loose_ends)
+}
+
 sort_snodes_cpp <- function(snode_id, circular) {
     .Call(`_fastKarOptim_sort_snodes_cpp`, snode_id, circular)
 }
