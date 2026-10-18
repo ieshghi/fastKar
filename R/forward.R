@@ -144,7 +144,11 @@ simulate_walks <- function(walks,tiled.target,widthdt,if.comps=F,mc.cores=1,if.s
         return(id.dt)
     },mc.cores=mc.cores)
     #
-    reference.intrachr = mclapply(1:length(walk.dts),function(ii){
+    n.ref = nrow(target.dat)
+    n.tiles = nrow(tiled.target)
+    # Each walk's contribution in reference coordinates, as a sparse (pixel id, value) pair of
+    # vectors. The pixel id of reference pixel (i, j), i <= j, is its row in the template.
+    reference.sparse = mclapply(1:length(walk.dts),function(ii){
         this.dt = data.table::copy(walk.dts[[ii]]) 
         this.dt[,end:=cumsum(width)] #end coordinates along the allele are just the sum of widths
         this.dt[,start:=end - width + 1] #start coordinates are the ends minus widths
@@ -160,19 +164,26 @@ simulate_walks <- function(walks,tiled.target,widthdt,if.comps=F,mc.cores=1,if.s
             refmat = (Matrix::t(transfmat.spr) %*% localmat)%*%transfmat.spr #apply coordinate transformation 
             #
             tsparse.ref = as(refmat,'TsparseMatrix')
-            dt.ref = data.table(i=tsparse.ref@i+1,j=tsparse.ref@j+1,value=tsparse.ref@x)[i<=j]# change to long format, Tsparsematrix is 0-indexed
-            setkeyv(dt.ref,c('i','j'))
-            intra.contacts = data.table::copy(target.dat)[dt.ref,on=.(i,j),value:=walk.cn[ii]*i.value] #join with the template hi-c map. Also multiply contacts by copy-number of the walk
+            keep = tsparse.ref@i <= tsparse.ref@j # upper triangle, Tsparsematrix is 0-indexed
+            return(list(id = pixel_id(tsparse.ref@i[keep]+1, tsparse.ref@j[keep]+1, n.tiles), value = tsparse.ref@x[keep]))
         }else{
-            intra.contacts = data.table::copy(target.dat[,.(i,j,id,value,widthprod)])
+            return(list(id = integer(0), value = numeric(0)))
         }
     },mc.cores=mc.cores)
     #
     if(if.sum){
+        # one accumulator over the template pixels; walk CN multiplies each walk's map
+        acc = numeric(n.ref)
+        for (ii in seq_along(reference.sparse)){
+            rs = reference.sparse[[ii]]
+            acc[rs$id] = acc[rs$id] + walk.cn[ii]*rs$value
+        }
         if (if.interchr & model==0){
-            total.counts = calculate_interchrom(reference.intrachr,walk.dts,tiled.target,walk.cn,if.comps=if.comps,mc.cores=mc.cores)
+            total.counts = interchrom_from_acc(target.dat,acc,tiled.target,if.comps=if.comps)
         }else{
-            total.counts = sum_matrices(reference.intrachr)
+            total.counts = target.dat[,.(i,j,id)]
+            setattr(total.counts,'sorted',NULL)
+            total.counts[,value:=acc]
         }
         if (gm.out){
             return(gM(gr = dt2gr(tiled.target),dat=total.counts[,value:=depth*value]))
@@ -180,7 +191,16 @@ simulate_walks <- function(walks,tiled.target,widthdt,if.comps=F,mc.cores=1,if.s
             return(list(gr = tiled.target, dat=total.counts[,value:=depth*value]))
         }
     }else{
-        scaled_out = lapply(reference.intrachr,function(x){
+        scaled_out = lapply(seq_along(reference.sparse),function(ii){
+            rs = reference.sparse[[ii]]
+            x = data.table::copy(target.dat)
+            if (length(rs$id)){
+                v = x$value
+                v[rs$id] = walk.cn[ii]*rs$value
+                x[,value:=v]
+            } else{
+                x = x[,.(i,j,id,value,widthprod)] # reference column order for an empty local map
+            }
             if (gm.out){
                 return(gM(gr=dt2gr(tiled.target),dat=x[,value:=depth*value]))
             } else{
@@ -189,6 +209,36 @@ simulate_walks <- function(walks,tiled.target,widthdt,if.comps=F,mc.cores=1,if.s
         })
         return(scaled_out)
     }
+}
+
+#' Pixel id of reference pixel (i, j), i <= j, on an n-tile template: its row in make_template_dat()
+#'
+#' @param i,j integer tile indices (1-based) with i <= j
+#' @param n number of tiles
+#' @return integer pixel ids
+pixel_id = function(i, j, n){
+    i = as.numeric(i); j = as.numeric(j)
+    as.integer((i - 1)*n - (i - 1)*(i - 2)/2 + (j - i + 1))
+}
+
+#' Add the one-shot interchromosomal term to an accumulated intrachromosomal map
+#'
+#' Vector form of calculate_interchrom(): value = acc + widthprod * rho * cn_i * cn_j on the template.
+#' @param target.dat template from make_template_dat_cpp(tiled.target), rows in pixel id order
+#' @param acc numeric vector of intrachromosomal contacts per template pixel
+#' @param tiled.target data.table of target tiles (column cn)
+#' @return data.table with columns i,j,id,value, keyed by id (as calculate_interchrom())
+interchrom_from_acc = function(target.dat,acc,tiled.target,if.comps=F){
+    if (if.comps){
+        stop('Compartments not supported in this version')
+    }
+    raw_density = fastKarOptim::interchrom_density
+    cn = tiled.target$cn
+    out = target.dat[,.(i,j,id)]
+    setattr(out,'sorted',NULL)
+    out[,value:=acc + target.dat$widthprod*raw_density*(cn[i]*cn[j])]
+    setkeyv(out,'id')
+    out
 }
 
 #' Hi-C contact density per bp^2 at genomic distance dist (bp), from the Rao 2014 distance spline
@@ -267,6 +317,18 @@ eval_comps <- function(tiled.walk,comps.gr=NULL){
 #' @param if.comps boolean, whether or not to consider compartments (defaults to FALSE)
 #' @return single data.table corresponding to the total contacts in the target region including both intra- and inter-chromosomal contacts
 calculate_interchrom <- function(intra.dts,walk.dts,tiled.target,walk.cn,if.comps=F,mc.cores=1,if.fast=T){
+    template = intra.dts[[1]]
+    if (!if.comps && same_pixels(intra.dts) && !is.unsorted(template$id, strictly = TRUE)){
+        # all maps on one template: plain vector sums, no merge
+        raw_density = fastKarOptim::interchrom_density
+        cn = tiled.target$cn
+        intra = Reduce(`+`, lapply(intra.dts, `[[`, 'value'))
+        out = template[,.(i,j,id)]
+        setattr(out,'sorted',NULL)
+        out[,value:=intra + template$widthprod*raw_density*(cn[i]*cn[j])]
+        setkeyv(out,'id')
+        return(out)
+    }
     target.dt = data.table::copy(tiled.target)[,.(orig.id=tile.id,cn,compartment)]
     template = data.table::copy(intra.dts[[1]])
     if (if.comps){
@@ -283,12 +345,25 @@ calculate_interchrom <- function(intra.dts,walk.dts,tiled.target,walk.cn,if.comp
     return(combdat[,.(i,j,id,value)])
 }
 
+#' TRUE if every table in a list has the same pixel ids, in the same order, with no duplicates
+same_pixels = function(matrices){
+    id1 = matrices[[1]]$id
+    if (anyDuplicated(id1)) return(FALSE)
+    all(vapply(matrices, function(m) identical(m$id, id1), logical(1)))
+}
+
 #' Sums the contacts coming from many gMatrix data.tables as fast as possible using the 'id' column. 
 #' 
 #' @param matrices list of data.tables of long-form gMatrices with columns i,j,id,value
 #' @return single data.table with same columns, with value column corresponding to the sum of all inputs for a given id
-#' NOTE: could be sped up with cpp
 sum_matrices <- function(matrices){
+    if (same_pixels(matrices)){
+        # all maps on one template: add the value vectors
+        outmat = matrices[[1]][,.(i,j,id)]
+        setattr(outmat,'sorted',NULL)
+        outmat[,value:=Reduce(`+`, lapply(matrices, `[[`, 'value'))]
+        return(outmat)
+    }
     allmats = do.call(rbind,matrices)
     allmats[,sumval:=sum(value),by='id']
     outmat = unique(allmats[,.(i,j,id,value = sumval)])
