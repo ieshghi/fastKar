@@ -112,6 +112,8 @@ benches = list(
     }),
     group_klcomp_1e5 = list(pix = 1e5, run = function(f, fx, pix) {
         if (length(fx$gw) < 3) return(NULL)
+        ## gWalk$hash looks hash_karyotype_cpp up from the global env (packages are not attached here)
+        assign('hash_karyotype_cpp', f('hash_karyotype_cpp'), envir = globalenv())
         function() f('group_klcomp')(fx$gw[1:min(4, length(fx$gw))], target_region = fx$ft, hic_resolution = pix, depth = 10)
     }),
     edit_dist = list(pix = NA, run = function(f, fx, pix) {
