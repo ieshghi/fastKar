@@ -97,6 +97,23 @@ benches = list(
         if (length(fx$gw) < 2) return(NULL)
         function() f('longread_kl')(fx$gw[[1]], fx$gw[[2]], readL = pix, depth = 10, use.nodes = NULL)
     }),
+    compmaps_kl_1e4 = list(pix = 1e4, run = function(f, fx, pix) {
+        a = f('forward_simulate')(fx$gw[[1]], target_region = fx$ft, pix.size = pix, depth = 10)
+        b = if (length(fx$gw) > 1) f('forward_simulate')(fx$gw[[2]], target_region = fx$ft, pix.size = pix, depth = 10) else a
+        function() f('compmaps')(a, b, return_kl = TRUE, area0 = pix^2, ifsum = TRUE)
+    }),
+    hic_cov_1e4 = list(pix = 1e4, run = function(f, fx, pix) {
+        sim = f('forward_simulate')(fx$gw[[1]], target_region = fx$ft, pix.size = pix, depth = 10)
+        function() f('hic_cov')(sim)
+    }),
+    liktest_lr_1e5 = list(pix = 1e5, run = function(f, fx, pix) {
+        if (length(fx$gw) < 2) return(NULL)
+        function() { set.seed(1); f('liktest_separable_lr')(fx$gw[[1]], fx$gw[[2]], readL = pix, depth = 10, nsamp = 20) }
+    }),
+    group_klcomp_1e5 = list(pix = 1e5, run = function(f, fx, pix) {
+        if (length(fx$gw) < 3) return(NULL)
+        function() f('group_klcomp')(fx$gw[1:min(4, length(fx$gw))], target_region = fx$ft, hic_resolution = pix, depth = 10)
+    }),
     edit_dist = list(pix = NA, run = function(f, fx, pix) {
         if (length(fx$gw) < 2) return(NULL)
         function() vapply(2:length(fx$gw), function(k) f('edit_dist_cpp')(fx$gw[[1]], fx$gw[[k]]), 1)
