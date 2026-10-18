@@ -9,6 +9,10 @@ count_kmers_cpp <- function(snode_ids, circular, k) {
     .Call(`_fastKarOptim_count_kmers_cpp`, snode_ids, circular, k)
 }
 
+traverse_graph_fast_cpp <- function(n, left, right, id, loose_ends) {
+    .Call(`_fastKarOptim_traverse_graph_fast_cpp`, n, left, right, id, loose_ends)
+}
+
 sort_snodes_cpp <- function(snode_id, circular) {
     .Call(`_fastKarOptim_sort_snodes_cpp`, snode_id, circular)
 }

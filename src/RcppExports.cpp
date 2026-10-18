@@ -36,6 +36,21 @@ BEGIN_RCPP
     return rcpp_result_gen;
 END_RCPP
 }
+// traverse_graph_fast_cpp
+List traverse_graph_fast_cpp(IntegerVector n, IntegerVector left, IntegerVector right, IntegerVector id, NumericVector loose_ends);
+RcppExport SEXP _fastKarOptim_traverse_graph_fast_cpp(SEXP nSEXP, SEXP leftSEXP, SEXP rightSEXP, SEXP idSEXP, SEXP loose_endsSEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    Rcpp::traits::input_parameter< IntegerVector >::type n(nSEXP);
+    Rcpp::traits::input_parameter< IntegerVector >::type left(leftSEXP);
+    Rcpp::traits::input_parameter< IntegerVector >::type right(rightSEXP);
+    Rcpp::traits::input_parameter< IntegerVector >::type id(idSEXP);
+    Rcpp::traits::input_parameter< NumericVector >::type loose_ends(loose_endsSEXP);
+    rcpp_result_gen = Rcpp::wrap(traverse_graph_fast_cpp(n, left, right, id, loose_ends));
+    return rcpp_result_gen;
+END_RCPP
+}
 // sort_snodes_cpp
 List sort_snodes_cpp(List snode_id, LogicalVector circular);
 RcppExport SEXP _fastKarOptim_sort_snodes_cpp(SEXP snode_idSEXP, SEXP circularSEXP) {
@@ -101,6 +116,7 @@ END_RCPP
 static const R_CallMethodDef CallEntries[] = {
     {"_fastKarOptim_compute_cost_matrix_cpp", (DL_FUNC) &_fastKarOptim_compute_cost_matrix_cpp, 3},
     {"_fastKarOptim_count_kmers_cpp", (DL_FUNC) &_fastKarOptim_count_kmers_cpp, 3},
+    {"_fastKarOptim_traverse_graph_fast_cpp", (DL_FUNC) &_fastKarOptim_traverse_graph_fast_cpp, 5},
     {"_fastKarOptim_sort_snodes_cpp", (DL_FUNC) &_fastKarOptim_sort_snodes_cpp, 2},
     {"_fastKarOptim_hash_karyotype_cpp", (DL_FUNC) &_fastKarOptim_hash_karyotype_cpp, 2},
     {"_fastKarOptim_traverse_graph_cpp", (DL_FUNC) &_fastKarOptim_traverse_graph_cpp, 2},

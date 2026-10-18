@@ -4,29 +4,51 @@ NULL
 
 #goes from a ggraph to a "wiring", which gives all the internal edges of the graph (going from left side of a node to right side)
 #along with the loose node ids and a reference data table with the new node ids (all copies of each node are de-duplicated)
+## Output is identical to the reference (fastKar 0a5497e) implementation, which encoded each edge
+## end as the string paste0(node, substr(side, 1, 1)), melted, and recovered left/right ends with
+## grepl/substr. Here the ends are kept as integer node ids plus a side code:
+##  * edge copies: external edges (graph edges, then left loose ends, then right loose ends, as in
+##    the reference rbind) with cn > 0, each repeated cn times; subid = copy index;
+##  * the melted long table lists every copy's n1 end, then every copy's n2 end;
+##  * left (right) table = long rows whose side starts with 'l' ('r') and whose node is > 0,
+##    stably sorted by node (as setkeyv did);
+##  * loose.ends = subids of copies of type 'LOO', ascending (= unique() over the melted order).
 gg.to.wiring = function(gg){ 
   if(!(('loose.cn.left' %in% colnames(gg$nodes$dt)) & ('loose.cn.right' %in% colnames(gg$nodes$dt)))){
   	gg = loosefix(gg)
   }
   nodesdt = gg$nodes$dt[,.(start,end,seqnames,snode.id,cn,loose.cn.left,loose.cn.right)]
-  nodesgr = gg$nodes$gr[,c('snode.id','cn')]
   edgesdt = gg$edges$dt[,.(cn,n1,n2,n1.side,n2.side,type)]
-  #make loose edges from nodesdt, then combine them will all other edges, then split all edges as left- and right-edges coming off of nodes
+  ## same NA fill as the reference (data.table coercion rules included)
   nodesdt[is.na(loose.cn.right),loose.cn.right:=cn]
   nodesdt[is.na(loose.cn.left),loose.cn.left:=cn] #adjusting CN at chromosome ends
-  # separate left and right loose ends and label them appropriately as edges going to node "0", before adding them to the total set of external edges
-  left.looseedges = data.table::copy(nodesdt)[loose.cn.left>0][,.(n2=snode.id,cn = loose.cn.left,n2.side='left',n1=0,n1.side='right')]
-  right.looseedges = data.table::copy(nodesdt)[loose.cn.right>0][,.(n1=snode.id,cn = loose.cn.right,n2.side='left',n2=0,n1.side='right')]
-  external.edges = rbind(edgesdt,rbind(left.looseedges,right.looseedges)[,type:='LOO'][,.(cn,n1,n2,n1.side,n2.side,type)])
-  dedup.edges = external.edges[cn>0][rep(1:.N,cn)][,.(n1,n2,n1.side,n2.side,type)] #separate all copies of all edges
-  split.edgetable = melt.data.table(dedup.edges[,.(n1=paste0(n1,substr(n1.side,1,1)),n2=paste0(n2,substr(n2.side,1,1)),subid=.I,type)],id=c('subid','type'))[,.(subid,n=value,type)] #separate all edges and label them with a unique ID "subid"
-  left.split.edgetable = split.edgetable[grepl('l',n)][,n:=as.integer(substr(n,1,nchar(n)-1))][n>0] %>% setkeyv('n') #setkey important so we have all left and right edges ordered appropriately.
-  right.split.edgetable = split.edgetable[grepl('r',n)][,n:=as.integer(substr(n,1,nchar(n)-1))][n>0] %>% setkeyv('n')
+  lsel = which(nodesdt$loose.cn.left > 0)
+  rsel = which(nodesdt$loose.cn.right > 0)
+  nL = length(lsel); nR = length(rsel)
+  ## left loose ends: n1 = 0 (right side), n2 = node (left side)
+  ## right loose ends: n1 = node (right side), n2 = 0 (left side)
+  ext.cn = c(edgesdt$cn, nodesdt$loose.cn.left[lsel], nodesdt$loose.cn.right[rsel])
+  ext.n1 = c(edgesdt$n1, rep(0, nL), nodesdt$snode.id[rsel])
+  ext.n2 = c(edgesdt$n2, nodesdt$snode.id[lsel], rep(0, nR))
+  ext.s1 = c(substr(edgesdt$n1.side, 1, 1), rep('r', nL + nR))
+  ext.s2 = c(substr(edgesdt$n2.side, 1, 1), rep('l', nL + nR))
+  ext.loo = c(as.character(edgesdt$type), rep("LOO", nL + nR)) == "LOO"
+  keep = which(ext.cn > 0)
+  copies = keep[rep(seq_along(keep), ext.cn[keep])] #separate all copies of all edges
+  ncp = length(copies)
+  node.long = suppressWarnings(c(as.integer(ext.n1[copies]), as.integer(ext.n2[copies])))
+  side.long = c(ext.s1[copies], ext.s2[copies])
+  subid.long = c(seq_len(ncp), seq_len(ncp))
+  lrows = which(side.long == 'l' & node.long > 0)
+  rrows = which(side.long == 'r' & node.long > 0)
+  lrows = lrows[order(node.long[lrows], method = 'radix')]
+  rrows = rrows[order(node.long[rrows], method = 'radix')]
   # each copy of each node has two edges coming out of it, one on the left one on the right. Each of those edges has a unique edge id which we call "subid"
-  internal.edges = cbind(left.split.edgetable[,.(n,left=subid)],right.split.edgetable$subid)[,.(n,left,right=V2)][,cn:=.N,by=n] #each unique mapping of right-edged to left-edges (reorderings of the third column) corresponds to a unique walk decomposition of the graph
+  internal.edges = data.table(n = node.long[lrows], left = subid.long[lrows], right = subid.long[rrows])
+  setattr(internal.edges, 'sorted', 'n')
+  internal.edges[,cn:=.N,by=n] #each unique mapping of right-edged to left-edges (reorderings of the third column) corresponds to a unique walk decomposition of the graph
   # where are the loose edges?
-  loose.subids = split.edgetable[type=='LOO']$subid %>% unique
-  #split the nodes in the graph to half-nodes. This needs to be done only one time. Then, aggregate Hi-C data to those half-nodes.
+  loose.subids = which(ext.loo[copies])
   internal.edges[,id:=.I]
   return(list(internal.edges = internal.edges,loose.ends = loose.subids,gg=gg))
 }
@@ -119,32 +141,67 @@ sample.gwalks = function(gg,N=1,mc.cores=1,chunksize = 1e3,return.gw=T,remove.du
   }
 }
 
-#samples karyotype space using markov chains always starting at the same walk, initialized randomly. 
-local.sampling = function(gg,nsteps,nwalk,frozen.nodes=NULL,onlyhash=F,starter_edges=NULL,return.edges=F,return.gw=F){
-  wiring = gg.to.wiring(gg)
-  shuffle_edges = function(edges) {
+## Integer view of a wiring table (internal.edges) for the samplers below. Only `right` changes
+## between karyotypes, so the samplers carry a `right` vector instead of copying the table, and
+## look up the rows of a node through `rows` (rows of each distinct n, in row order: exactly what
+## the reference selected with edges[n == x]).
+.wiring_state = function(edges, loose.ends) {
+  n = edges$n
+  un = unique(n)
+  list(n = n, cn = edges$cn, right = edges$right, un = un,
+       rows = unname(split(seq_along(n), factor(match(n, un), levels = seq_along(un)))),
+       n_int = as.integer(n), left_int = as.integer(edges$left), id_int = as.integer(edges$id),
+       loose = as.numeric(loose.ends))
+}
+.wiring_rows = function(st, node) st$rows[[match(node, st$un)]]
+## traverse_graph_cpp(edges with this right column, loose.ends)
+.wiring_traverse = function(st, right) traverse_graph_fast_cpp(st$n_int, st$left_int, as.integer(right), st$id_int, st$loose)
+## the reference permute.node swap: same sample() call, same assignment
+.wiring_swap = function(right, rows) {
+	edges.to.permute = right[rows]
+	inds = sample(seq_along(edges.to.permute),2)
+	edges.to.permute[c(inds[1],inds[2])] <- edges.to.permute[c(inds[2],inds[1])]
+	right[rows] = edges.to.permute
+	right
+}
+## the reference initial shuffle (in place on `edges`), kept verbatim for its RNG stream
+.wiring_shuffle = function(edges) {
         new_right = edges[, if (.N > 1) sample(right, .N) else right, by = n]$V1
   	return(edges[,right:=new_right])
-  }
+}
+## internal.edges of a wiring: the wiring's own table when it was computed here (the reference
+## shuffles that in place), a copy when the caller passed one in, so the caller's object is kept.
+.wiring_edges = function(wiring, supplied) {
+  if (supplied) data.table::copy(wiring$internal.edges) else wiring$internal.edges
+}
+
+#samples karyotype space using markov chains always starting at the same walk, initialized randomly. 
+## wiring: optional precomputed gg.to.wiring(gg) (not modified). Same RNG draws and outputs as the
+## reference: the by-group shuffle of `right` (unless starter_edges), then per step
+## sample.int(#pivots, 1) and sample(seq_along(rows), 2).
+local.sampling = function(gg,nsteps,nwalk,frozen.nodes=NULL,onlyhash=F,starter_edges=NULL,return.edges=F,return.gw=F,wiring=NULL){
+  supplied = !is.null(wiring)
+  if (!supplied) wiring = gg.to.wiring(gg)
   if (is.null(starter_edges)){
-  	internal.edges = shuffle_edges(wiring$internal.edges)
+  	internal.edges = .wiring_shuffle(.wiring_edges(wiring, supplied))
   } else {
 	internal.edges = starter_edges
   }
   loose.ends = wiring$loose.ends
-  hashhist = c()
-  permute.node = function(edges) {
-	pivots = setdiff(edges[cn>1]$n,frozen.nodes)
-  	if (length(pivots)==0){return(edges)}
-	pivot.node = pivots[sample.int(length(pivots),1)] #sample(x,1) on a single integer x would draw from 1:x
-	new_edges = data.table::copy(edges)
-	edges.to.permute = edges[n==pivot.node]$right
-	inds = sample(seq_along(edges.to.permute),2)
-	edges.to.permute[c(inds[1],inds[2])] <- edges.to.permute[c(inds[2],inds[1])]
-  	new_edges[n==pivot.node,right:=edges.to.permute]
-	return(new_edges)
+  st = .wiring_state(internal.edges, loose.ends)
+  ## n and cn never change between steps, so the pivots (and their rows) are fixed
+  pivots = setdiff(st$n[which(st$cn > 1)], frozen.nodes)
+  pivot.rows = lapply(pivots, function(p) .wiring_rows(st, p))
+  permute.node = function(right) {
+  	if (length(pivots)==0){return(right)}
+	k = sample.int(length(pivots),1) #sample(x,1) on a single integer x would draw from 1:x
+	.wiring_swap(right, pivot.rows[[k]])
   }
-  gw0 = traverse_graph_cpp(internal.edges,loose.ends)
+  ## the reference's first step evaluates edges[n == pivot] on internal.edges itself, which makes
+  ## data.table add an auto-index when the table is not keyed by n; repeat it so starter_edges
+  ## comes back with the same attributes
+  if (nwalk >= 1 && nsteps >= 2 && length(pivots) > 0) invisible(internal.edges[n == pivots[1L]])
+  gw0 = .wiring_traverse(st, st$right)
   if (return.gw){
 	gw0 = gW(graph=gg,snode.id=gw0$snode.id,circular=gw0$circular)
   }else{
@@ -152,23 +209,29 @@ local.sampling = function(gg,nsteps,nwalk,frozen.nodes=NULL,onlyhash=F,starter_e
   }
   walkhist = lapply(1:nwalk,function(i){list(gw0)}) #initialize nwalk walkers at the same point
   hashhist = lapply(1:nwalk,function(i){gw0$hash}) #initialize hashes
-  edges = lapply(1:nwalk,function(i){internal.edges}) #initialize edge table
   for (i in seq_len(nwalk)){
-  for (j in seq_len(nsteps-1)){
-	newedges = permute.node(edges[[i]])	
-	newwalk = traverse_graph_cpp(newedges,loose.ends)
-	if (return.gw){
-		newwalk = gW(graph=gg,snode.id=newwalk$snode.id,circular=newwalk$circular)
-		newhash = newwalk$hash
-	}
-	else{
-		newhash = hash_karyotype_cpp(newwalk$snode.id,newwalk$circular)
-		newwalk$hash = newhash
-	}
-	edges[[i]] = newedges
-	walkhist[[i]][[j+1]] = newwalk 
-	hashhist[[i]] = c(hashhist[[i]],newhash)	
-  }}
+  	steps = seq_len(nsteps-1)
+	if (!length(steps)) next
+	right = st$right
+	wl = c(walkhist[[i]], vector('list', length(steps)))
+	hl = c(hashhist[[i]], character(length(steps)))
+  	for (j in steps){
+		right = permute.node(right)
+		newwalk = .wiring_traverse(st, right)
+		if (return.gw){
+			newwalk = gW(graph=gg,snode.id=newwalk$snode.id,circular=newwalk$circular)
+			newhash = newwalk$hash
+		}
+		else{
+			newhash = hash_karyotype_cpp(newwalk$snode.id,newwalk$circular)
+			newwalk$hash = newhash
+		}
+		wl[[j+1]] = newwalk 
+		hl[j+1] = newhash
+  	}
+	walkhist[[i]] = wl
+	hashhist[[i]] = hl
+  }
   if (return.edges){
 	hashhist = list(hashes=hashhist,starter_edges = internal.edges)
 	walkhist = list(walks=walkhist,starter_edges = internal.edges)
@@ -181,38 +244,33 @@ local.sampling = function(gg,nsteps,nwalk,frozen.nodes=NULL,onlyhash=F,starter_e
 }
 
 #faster version of local.sampling for sampling the neighborhood of one walk. It only samples walks that are exactly one step away from the starting point
-sample.neighborhood = function(gg,n_neighbor,starter_edges=NULL,return.edges=F,return.gw=T,mc.cores=1){
-  wiring = gg.to.wiring(gg)
-  shuffle_edges = function(edges) {
-        new_right = edges[, if (.N > 1) sample(right, .N) else right, by = n]$V1
-  	return(edges[,right:=new_right])
-  }
+## wiring: optional precomputed gg.to.wiring(gg) (not modified). Draws as in the reference:
+## sample(edges[cn > 1]$n, 1) (pivot weighted by CN), then sample(seq_along(rows), 2).
+sample.neighborhood = function(gg,n_neighbor,starter_edges=NULL,return.edges=F,return.gw=T,mc.cores=1,wiring=NULL){
+  supplied = !is.null(wiring)
+  if (!supplied) wiring = gg.to.wiring(gg)
   if (is.null(starter_edges)){
-  	internal.edges = shuffle_edges(wiring$internal.edges)
+  	internal.edges = .wiring_shuffle(.wiring_edges(wiring, supplied))
   } else {
 	internal.edges = starter_edges
   }
   loose.ends = wiring$loose.ends
-  hashhist = c()
-  permute.node = function(edges) {
-  	if (nrow(edges[cn>1])==0){return(edges)}
-	pivot.node = sample(edges[cn>1]$n,1)
-	new_edges = data.table::copy(edges)
-	edges.to.permute = edges[n==pivot.node]$right
-	inds = sample(seq_along(edges.to.permute),2)
-	edges.to.permute[c(inds[1],inds[2])] <- edges.to.permute[c(inds[2],inds[1])]
-  	new_edges[n==pivot.node,right:=edges.to.permute]
-	return(new_edges)
+  st = .wiring_state(internal.edges, loose.ends)
+  cand = st$n[which(st$cn > 1)]
+  permute.node = function(right) {
+  	if (length(cand)==0){return(right)}
+	pivot.node = sample(cand,1)
+	.wiring_swap(right, .wiring_rows(st, pivot.node))
   }
-  gw0 = traverse_graph_cpp(internal.edges,loose.ends)
+  gw0 = .wiring_traverse(st, st$right)
   if (return.gw){
 	gw0 = gW(graph=gg,snode.id=gw0$snode.id,circular=gw0$circular)
   }else{
   	gw0$hash = hash_karyotype_cpp(gw0$snode.id,gw0$circular)
   }
-  new_perms = mclapply(1:n_neighbor,function(x){permute.node(copy(internal.edges))},mc.cores=mc.cores)
+  new_perms = mclapply(1:n_neighbor,function(x){permute.node(st$right)},mc.cores=mc.cores)
   neighbor_walks = mclapply(new_perms,function(p){
-			newwalk = traverse_graph_cpp(p,loose.ends)
+			newwalk = .wiring_traverse(st, p)
 			if (return.gw){
 				newwalk = gW(graph=gg,snode.id=newwalk$snode.id,circular=newwalk$circular)
 				newhash = newwalk$hash
@@ -230,28 +288,25 @@ sample.neighborhood = function(gg,n_neighbor,starter_edges=NULL,return.edges=F,r
   }
 }
 #starts a markov chain at a random location and samples for a given length
-markov.gwalk = function(gg,len,self.avoid = F,attempts = 10,return.gw=F,seed=NULL){
+## wiring: optional precomputed gg.to.wiring(gg) (not modified).
+markov.gwalk = function(gg,len,self.avoid = F,attempts = 10,return.gw=F,seed=NULL,wiring=NULL){
   if (is.null(seed)){set.seed(sample(1:1e5,1))
   } else{set.seed(seed)}
-  wiring = gg.to.wiring(gg)
-  internal.edges = wiring$internal.edges
+  supplied = !is.null(wiring)
+  if (!supplied) wiring = gg.to.wiring(gg)
+  internal.edges = .wiring_edges(wiring, supplied)
   loose.ends = wiring$loose.ends
   hashhist = c()
   walkhist = list()
-  permute.node = function(edges) {
-	pivot.node = sample(edges[cn>1]$n,1)
-	new_edges = data.table::copy(edges)
-	edges.to.permute = edges[n==pivot.node]$right
-	inds = sample(seq_along(edges.to.permute),2)
-	edges.to.permute[c(inds[1],inds[2])] <- edges.to.permute[c(inds[2],inds[1])]
-  	new_edges[n==pivot.node,right:=edges.to.permute]
-	return(new_edges)
+  internal.edges = .wiring_shuffle(internal.edges)
+  st = .wiring_state(internal.edges, loose.ends)
+  cand = st$n[which(st$cn > 1)]
+  permute.node = function(right) {
+	pivot.node = sample(cand,1)
+	.wiring_swap(right, .wiring_rows(st, pivot.node))
   }
-  shuffle_edges = function(edges) {
-        new_right = edges[, if (.N > 1) sample(right, .N) else right, by = n]$V1
-  	return(edges[,right:=new_right])
-  }
-  gw0 = traverse_graph_cpp(shuffle_edges(internal.edges),loose.ends)
+  right = st$right
+  gw0 = .wiring_traverse(st, right)
   gw0$hash = hash_karyotype_cpp(gw0$snode.id,gw0$circular)
   walkhist[[1]] = gw0
   hashhist = c(hashhist,gw0$hash)
@@ -260,14 +315,14 @@ markov.gwalk = function(gg,len,self.avoid = F,attempts = 10,return.gw=F,seed=NUL
   	killwalk = T #gets switched to F if we find the next step
   	for (j in seq_len(attempts)){
 		if (!valid){
-			edge_try = permute.node(internal.edges)	
-			walk_try = traverse_graph_cpp(edge_try,loose.ends)
+			edge_try = permute.node(right)	
+			walk_try = .wiring_traverse(st, edge_try)
 			hash_try = hash_karyotype_cpp(walk_try$snode.id,walk_try$circular)
 			if (self.avoid){
 				valid = !(hash_try %in% hashhist)
 			} else{valid=T}
 		} else{
-			internal.edges = edge_try
+			right = edge_try
 			walk_try$hash = hash_try
 			walkhist[[i+1]] = walk_try
 			hashhist = c(hashhist,hash_try)	
@@ -286,12 +341,14 @@ markov.gwalk = function(gg,len,self.avoid = F,attempts = 10,return.gw=F,seed=NUL
 }
 
 #runs markov.gwalk in parallel starting at random locations. different from local.sampling because that function starts all markov chains at the same location!
-multi.markov = function(gg,N,len,self.avoid=F,attempts=10,mc.cores=1,return.gw=F,seed=NULL){
+## The wiring is computed once and shared by all chains (gg.to.wiring draws no random numbers).
+multi.markov = function(gg,N,len,self.avoid=F,attempts=10,mc.cores=1,return.gw=F,seed=NULL,wiring=NULL){
 	if (is.null(seed)){set.seed(sample(1:1e5,1))
 	}else{set.seed(seed)}
 	seeds = sample(1:1e5,N)
+	if (is.null(wiring)) wiring = gg.to.wiring(gg)
 	mclapply(1:N,function(i){
-		markov.gwalk(gg=gg,len=len,self.avoid=self.avoid,attempts=attempts,return.gw=return.gw,seed=seeds[i])  
+		markov.gwalk(gg=gg,len=len,self.avoid=self.avoid,attempts=attempts,return.gw=return.gw,seed=seeds[i],wiring=wiring)  
   },mc.cores=mc.cores)
 }
 
