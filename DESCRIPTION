@@ -1,4 +1,4 @@
-Package: fastKar
+Package: fastKarOptim
 Title: Simulate rearranged karyotype Hi-C, fast!
 Version: 0.0.0.9000
 Authors@R: 

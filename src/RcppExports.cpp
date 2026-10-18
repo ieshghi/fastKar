@@ -12,7 +12,7 @@ Rcpp::Rostream<false>& Rcpp::Rcerr = Rcpp::Rcpp_cerr_get();
 
 // compute_cost_matrix_cpp
 NumericMatrix compute_cost_matrix_cpp(List sn_x, List sn_y, NumericVector penalty);
-RcppExport SEXP _fastKar_compute_cost_matrix_cpp(SEXP sn_xSEXP, SEXP sn_ySEXP, SEXP penaltySEXP) {
+RcppExport SEXP _fastKarOptim_compute_cost_matrix_cpp(SEXP sn_xSEXP, SEXP sn_ySEXP, SEXP penaltySEXP) {
 BEGIN_RCPP
     Rcpp::RObject rcpp_result_gen;
     Rcpp::RNGScope rcpp_rngScope_gen;
@@ -25,7 +25,7 @@ END_RCPP
 }
 // count_kmers_cpp
 DataFrame count_kmers_cpp(List snode_ids, LogicalVector circular, int k);
-RcppExport SEXP _fastKar_count_kmers_cpp(SEXP snode_idsSEXP, SEXP circularSEXP, SEXP kSEXP) {
+RcppExport SEXP _fastKarOptim_count_kmers_cpp(SEXP snode_idsSEXP, SEXP circularSEXP, SEXP kSEXP) {
 BEGIN_RCPP
     Rcpp::RObject rcpp_result_gen;
     Rcpp::RNGScope rcpp_rngScope_gen;
@@ -38,7 +38,7 @@ END_RCPP
 }
 // sort_snodes_cpp
 List sort_snodes_cpp(List snode_id, LogicalVector circular);
-RcppExport SEXP _fastKar_sort_snodes_cpp(SEXP snode_idSEXP, SEXP circularSEXP) {
+RcppExport SEXP _fastKarOptim_sort_snodes_cpp(SEXP snode_idSEXP, SEXP circularSEXP) {
 BEGIN_RCPP
     Rcpp::RObject rcpp_result_gen;
     Rcpp::RNGScope rcpp_rngScope_gen;
@@ -50,7 +50,7 @@ END_RCPP
 }
 // hash_karyotype_cpp
 std::string hash_karyotype_cpp(List snode_id, LogicalVector circular);
-RcppExport SEXP _fastKar_hash_karyotype_cpp(SEXP snode_idSEXP, SEXP circularSEXP) {
+RcppExport SEXP _fastKarOptim_hash_karyotype_cpp(SEXP snode_idSEXP, SEXP circularSEXP) {
 BEGIN_RCPP
     Rcpp::RObject rcpp_result_gen;
     Rcpp::RNGScope rcpp_rngScope_gen;
@@ -62,7 +62,7 @@ END_RCPP
 }
 // traverse_graph_cpp
 List traverse_graph_cpp(DataFrame A, NumericVector loose_ends);
-RcppExport SEXP _fastKar_traverse_graph_cpp(SEXP ASEXP, SEXP loose_endsSEXP) {
+RcppExport SEXP _fastKarOptim_traverse_graph_cpp(SEXP ASEXP, SEXP loose_endsSEXP) {
 BEGIN_RCPP
     Rcpp::RObject rcpp_result_gen;
     Rcpp::RNGScope rcpp_rngScope_gen;
@@ -74,7 +74,7 @@ END_RCPP
 }
 // traverse_graph_v2_cpp
 List traverse_graph_v2_cpp(DataFrame A, NumericVector loose_ends);
-RcppExport SEXP _fastKar_traverse_graph_v2_cpp(SEXP ASEXP, SEXP loose_endsSEXP) {
+RcppExport SEXP _fastKarOptim_traverse_graph_v2_cpp(SEXP ASEXP, SEXP loose_endsSEXP) {
 BEGIN_RCPP
     Rcpp::RObject rcpp_result_gen;
     Rcpp::RNGScope rcpp_rngScope_gen;
@@ -86,7 +86,7 @@ END_RCPP
 }
 // traverse_graph_v2_batch_cpp
 List traverse_graph_v2_batch_cpp(DataFrame A, List perms, NumericVector loose_ends);
-RcppExport SEXP _fastKar_traverse_graph_v2_batch_cpp(SEXP ASEXP, SEXP permsSEXP, SEXP loose_endsSEXP) {
+RcppExport SEXP _fastKarOptim_traverse_graph_v2_batch_cpp(SEXP ASEXP, SEXP permsSEXP, SEXP loose_endsSEXP) {
 BEGIN_RCPP
     Rcpp::RObject rcpp_result_gen;
     Rcpp::RNGScope rcpp_rngScope_gen;
@@ -99,17 +99,17 @@ END_RCPP
 }
 
 static const R_CallMethodDef CallEntries[] = {
-    {"_fastKar_compute_cost_matrix_cpp", (DL_FUNC) &_fastKar_compute_cost_matrix_cpp, 3},
-    {"_fastKar_count_kmers_cpp", (DL_FUNC) &_fastKar_count_kmers_cpp, 3},
-    {"_fastKar_sort_snodes_cpp", (DL_FUNC) &_fastKar_sort_snodes_cpp, 2},
-    {"_fastKar_hash_karyotype_cpp", (DL_FUNC) &_fastKar_hash_karyotype_cpp, 2},
-    {"_fastKar_traverse_graph_cpp", (DL_FUNC) &_fastKar_traverse_graph_cpp, 2},
-    {"_fastKar_traverse_graph_v2_cpp", (DL_FUNC) &_fastKar_traverse_graph_v2_cpp, 2},
-    {"_fastKar_traverse_graph_v2_batch_cpp", (DL_FUNC) &_fastKar_traverse_graph_v2_batch_cpp, 3},
+    {"_fastKarOptim_compute_cost_matrix_cpp", (DL_FUNC) &_fastKarOptim_compute_cost_matrix_cpp, 3},
+    {"_fastKarOptim_count_kmers_cpp", (DL_FUNC) &_fastKarOptim_count_kmers_cpp, 3},
+    {"_fastKarOptim_sort_snodes_cpp", (DL_FUNC) &_fastKarOptim_sort_snodes_cpp, 2},
+    {"_fastKarOptim_hash_karyotype_cpp", (DL_FUNC) &_fastKarOptim_hash_karyotype_cpp, 2},
+    {"_fastKarOptim_traverse_graph_cpp", (DL_FUNC) &_fastKarOptim_traverse_graph_cpp, 2},
+    {"_fastKarOptim_traverse_graph_v2_cpp", (DL_FUNC) &_fastKarOptim_traverse_graph_v2_cpp, 2},
+    {"_fastKarOptim_traverse_graph_v2_batch_cpp", (DL_FUNC) &_fastKarOptim_traverse_graph_v2_batch_cpp, 3},
     {NULL, NULL, 0}
 };
 
-RcppExport void R_init_fastKar(DllInfo *dll) {
+RcppExport void R_init_fastKarOptim(DllInfo *dll) {
     R_registerRoutines(dll, NULL, CallEntries, NULL, NULL);
     R_useDynamicSymbols(dll, FALSE);
 }

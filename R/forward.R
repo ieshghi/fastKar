@@ -92,7 +92,7 @@ prep_for_sim = function(walks,target_region=NULL,pix.size=1e5,if.comps=F){
         tiled.target$compartment = 'A'
     }else{
         stop('Compartments not supported in this version')
-        comps.gr = gr.nochr(fastKar::compartment_lookup)
+        comps.gr = gr.nochr(fastKarOptim::compartment_lookup)
         tiled.target = eval_comps(gr.tile(target_region,pix.size),comps.gr) #need to update eval_comps to dt mode
     }
     return(list(tiled.target=tiled.target,widthdt=widthdt))
@@ -200,10 +200,10 @@ simulate_walks <- function(walks,tiled.target,widthdt,if.comps=F,mc.cores=1,if.s
 #' @return numeric vector of contact densities
 distance_density = function(dist){
     ldist = log(dist)
-    lmin = environment(fastKar::splineobj$distance_spline)$z$x[1]
-    out = fastKar::splineobj$distance_spline(pmax(ldist, lmin))
+    lmin = environment(fastKarOptim::splineobj$distance_spline)$z$x[1]
+    out = fastKarOptim::splineobj$distance_spline(pmax(ldist, lmin))
     below = ldist < lmin
-    out[below] = out[below] + fastKar::splineobj$distance_spline(lmin, deriv = 1) * (ldist[below] - lmin)
+    out[below] = out[below] + fastKarOptim::splineobj$distance_spline(lmin, deriv = 1) * (ldist[below] - lmin)
     exp(out)
 }
 
@@ -226,10 +226,10 @@ simulate_map<-  function(walk.dt,is.circular=FALSE,model=0){
         maxval = 1e8
         maxval_density = distance_density(maxval) #density at maximum cutoff
         dat.new[dist>0,value:=widthprod*distance_density(dist)]
-        dat.new[dist==0,value:=exp(fastKar::splineobj$diag_spline(log(widthprod)))]
+        dat.new[dist==0,value:=exp(fastKarOptim::splineobj$diag_spline(log(widthprod)))]
         dat.new[dist>maxval,value:=widthprod*maxval_density*maxval/dist] #assume 1/distance scaling for values > 1e8
    }else {
-        min.res = min(fastKar::small_lookup[d>0]$d)
+        min.res = min(fastKarOptim::small_lookup[d>0]$d)
         dat.new[,value:=widthprod/(10*min.res^2)*(exp(-dist/model))]
         #some analytical model for short/long reads with readlength as an input parameter
    }
@@ -270,10 +270,10 @@ calculate_interchrom <- function(intra.dts,walk.dts,tiled.target,walk.cn,if.comp
     target.dt = data.table::copy(tiled.target)[,.(orig.id=tile.id,cn,compartment)]
     template = data.table::copy(intra.dts[[1]])
     if (if.comps){
-        lookup_interchr = fastKar::small_lookup[d<0]
+        lookup_interchr = fastKarOptim::small_lookup[d<0]
         template[,raw_density:=lookup_interchr[interaction==this.interaction]$tot_density/1500,by=this.interaction]
     }else{
-        raw_density= fastKar::interchrom_density
+        raw_density= fastKarOptim::interchrom_density
     }
     # use one-shot calculation formula: n_ij = rate * widthprod * (CN_i*CN_j)
     mydat = data.table::copy(template)[,titj:=target.dt$cn[i]*target.dt$cn[j]] 
@@ -387,14 +387,14 @@ simulate_diploid_map = function(tiled.target,if.comps=FALSE,depth=1,model=0,if.i
         maxval = 1e8
         maxval_density = distance_density(maxval)
         out.dat[same_chrom & dist>0,value:=2*widthprod*distance_density(dist)]
-        out.dat[same_chrom & dist==0,value:=2*exp(fastKar::splineobj$diag_spline(log(widthprod)))]
+        out.dat[same_chrom & dist==0,value:=2*exp(fastKarOptim::splineobj$diag_spline(log(widthprod)))]
         out.dat[same_chrom & dist>maxval,value:=2*widthprod*maxval_density*maxval/dist]
         if (if.interchr){
-            raw_density = fastKar::interchrom_density
+            raw_density = fastKarOptim::interchrom_density
             out.dat[,value:=value + widthprod*raw_density*4]
         }
     } else{
-        min.res = min(fastKar::small_lookup[d>0]$d)
+        min.res = min(fastKarOptim::small_lookup[d>0]$d)
         out.dat[same_chrom,value:=2*widthprod/(10*min.res^2)*(exp(-dist/model))]
     }
     out.dat[is.na(value),value:=0]

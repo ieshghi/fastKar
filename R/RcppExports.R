@@ -2,30 +2,30 @@
 # Generator token: 10BE3573-1514-4C36-9D1C-5A225CD40393
 
 compute_cost_matrix_cpp <- function(sn_x, sn_y, penalty) {
-    .Call(`_fastKar_compute_cost_matrix_cpp`, sn_x, sn_y, penalty)
+    .Call(`_fastKarOptim_compute_cost_matrix_cpp`, sn_x, sn_y, penalty)
 }
 
 count_kmers_cpp <- function(snode_ids, circular, k) {
-    .Call(`_fastKar_count_kmers_cpp`, snode_ids, circular, k)
+    .Call(`_fastKarOptim_count_kmers_cpp`, snode_ids, circular, k)
 }
 
 sort_snodes_cpp <- function(snode_id, circular) {
-    .Call(`_fastKar_sort_snodes_cpp`, snode_id, circular)
+    .Call(`_fastKarOptim_sort_snodes_cpp`, snode_id, circular)
 }
 
 hash_karyotype_cpp <- function(snode_id, circular) {
-    .Call(`_fastKar_hash_karyotype_cpp`, snode_id, circular)
+    .Call(`_fastKarOptim_hash_karyotype_cpp`, snode_id, circular)
 }
 
 traverse_graph_cpp <- function(A, loose_ends) {
-    .Call(`_fastKar_traverse_graph_cpp`, A, loose_ends)
+    .Call(`_fastKarOptim_traverse_graph_cpp`, A, loose_ends)
 }
 
 traverse_graph_v2_cpp <- function(A, loose_ends) {
-    .Call(`_fastKar_traverse_graph_v2_cpp`, A, loose_ends)
+    .Call(`_fastKarOptim_traverse_graph_v2_cpp`, A, loose_ends)
 }
 
 traverse_graph_v2_batch_cpp <- function(A, perms, loose_ends) {
-    .Call(`_fastKar_traverse_graph_v2_batch_cpp`, A, perms, loose_ends)
+    .Call(`_fastKarOptim_traverse_graph_v2_batch_cpp`, A, perms, loose_ends)
 }
 
