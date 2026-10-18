@@ -436,7 +436,37 @@ to_gwalk = function(walklist,gr,mc.cores=1){
 	return(gW(grl=grl,circular=walklist$circular[keep])$disjoin())
 }
 
+## Long-read words of a walk set: one row per distinct word (node ids of the reads' overlapped
+## nodes joined by '|', both orientations, nodes narrower than minsize or outside use.nodes
+## dropped) with nums = number of read start positions giving it, summed over walks.
+## Identical (words, nums and row order) to the reference foverlaps implementation; the sweep is
+## in reads_fromwalk_cpp (src/graphstats_reads.cpp).
 reads_fromwalk = function(walk,readL,minsize=0,use.nodes=NULL){
+	gr = walk$graph$gr[,c('node.id')]
+	tinynodes = gr[width(gr) < minsize]$node.id
+	if (!is.null(use.nodes)){
+		tinynodes = c(tinynodes,gr$node.id[!(gr$node.id %in% use.nodes)])
+	}
+	sn = walk$snode.id
+	lens = lengths(sn)
+	circ = as.logical(walk$circular)
+	if (!(is.numeric(readL) && length(readL) == 1 && is.finite(readL) && readL >= 1 && readL == round(readL)) ||
+	    !length(sn) || any(lens == 0) || length(circ) != length(sn) || anyNA(circ)){
+		return(.reads_fromwalk_ref(walk,readL,minsize=minsize,use.nodes=use.nodes))
+	}
+	x = unlist(sn, use.names = FALSE)
+	ax = abs(x)
+	## tokens per walk, so each walk's ids print as as.character() prints that walk's vector
+	fwd = unlist(lapply(sn, function(v) as.character(v)), use.names = FALSE)
+	rtok = unlist(lapply(sn, function(v) as.character(-v)), use.names = FALSE)
+	res = reads_fromwalk_cpp(width(gr)[ax], as.integer(lens), circ, as.numeric(readL), fwd, rtok, !(ax %in% tinynodes))
+	data.table(words = res$words, nums = res$nums)
+}
+
+## Reference (fastKar 0a5497e) implementation, kept verbatim as the fallback of reads_fromwalk()
+## for read lengths that are not integer-valued (where foverlaps' end adjustment on doubles could
+## matter) and for degenerate walks.
+.reads_fromwalk_ref = function(walk,readL,minsize=0,use.nodes=NULL){
 	gr = walk$graph$gr[,c('node.id')]
 	tinynodes = gr[width(gr) < minsize]$node.id
 	if (!is.null(use.nodes)){
