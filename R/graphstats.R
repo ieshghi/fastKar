@@ -134,8 +134,9 @@ local.sampling = function(gg,nsteps,nwalk,frozen.nodes=NULL,onlyhash=F,starter_e
   loose.ends = wiring$loose.ends
   hashhist = c()
   permute.node = function(edges) {
-  	if (nrow(edges[cn>1])==0){return(edges)}
-	pivot.node = sample(setdiff(edges[cn>1]$n,frozen.nodes),1)
+	pivots = setdiff(edges[cn>1]$n,frozen.nodes)
+  	if (length(pivots)==0){return(edges)}
+	pivot.node = pivots[sample.int(length(pivots),1)] #sample(x,1) on a single integer x would draw from 1:x
 	new_edges = data.table::copy(edges)
 	edges.to.permute = edges[n==pivot.node]$right
 	inds = sample(seq_along(edges.to.permute),2)
@@ -507,7 +508,42 @@ alignscore_compl = function(x,y,gp){
 	else{return(s1)}
 }
 
-edit_dist_cpp = function(gwx,gwy,graph=NULL,return_all = F,constpenalty=F,use.nodes=NULL){
+## Cut sorted walks into fragments of nonzero-penalty nodes that stay inside a
+## region. left.in/right.in (indexed by node id) say whether each node's left
+## and right end lies in the region. Consecutive kept nodes share a fragment
+## only if no dropped node lies between them and the walk leaves the first and
+## enters the second through in-region ends. For a circular walk, the last
+## fragment continues into the first when the wrap-around step qualifies.
+split_walk_fragments = function(nodelist,circ,penalty,left.in,right.in){
+	exit.in = function(s) ifelse(s > 0, right.in[abs(s)], left.in[abs(s)])
+	entry.in = function(s) ifelse(s > 0, left.in[abs(s)], right.in[abs(s)])
+	out = list()
+	for (k in seq_along(nodelist)){
+		v = nodelist[[k]]
+		idx = which(penalty[abs(v)] != 0)
+		if (!length(idx)) next
+		kv = v[idx]
+		nk = length(kv)
+		joined = if (nk > 1) diff(idx) == 1 & exit.in(kv[-nk]) & entry.in(kv[-1]) else logical(0)
+		pieces = unname(split(kv, cumsum(c(TRUE, !joined))))
+		np = length(pieces)
+		if (isTRUE(circ[k]) && np > 1 && idx[1] == 1 && idx[nk] == length(v) &&
+		    exit.in(kv[nk]) && entry.in(kv[1])){
+			pieces[[1]] = c(pieces[[np]], pieces[[1]])
+			pieces = pieces[-np]
+		}
+		out = c(out, pieces)
+	}
+	out
+}
+
+## node.widths: optional per-node weights (named by node.id) replacing node widths;
+## nodes not named get weight 0.
+## split.ends: optional list(left = , right = ) of logicals named by node.id,
+## whether each node's left/right end lies in the comparison region. When given,
+## walks are compared as fragments inside that region (see split_walk_fragments)
+## rather than as whole walks. Both NULL reproduces the original behaviour.
+edit_dist_cpp = function(gwx,gwy,graph=NULL,return_all = F,constpenalty=F,use.nodes=NULL,node.widths=NULL,split.ends=NULL){
 	if (is.null(graph)){
 		graph = gwx$graph
 		if (is.null(graph)){
@@ -515,6 +551,11 @@ edit_dist_cpp = function(gwx,gwy,graph=NULL,return_all = F,constpenalty=F,use.no
 		}
 	}
 	nodedt = graph$nodes$dt[,.(width,node.id)]
+	if (!is.null(node.widths)){
+		w = node.widths[as.character(nodedt$node.id)]
+		w[is.na(w)] = 0
+		nodedt$width = as.numeric(w)
+	}
 	if (!is.null(use.nodes)){
 		nodedt[!(node.id %in% use.nodes)]$width=0
 	}
@@ -527,8 +568,22 @@ edit_dist_cpp = function(gwx,gwy,graph=NULL,return_all = F,constpenalty=F,use.no
 	}else{
 		penalty[abs(ids)] = -widthvec
 	}
-	sn_x = sort_snodes(gwx$snode.id,gwx$circular)$nodelist
-	sn_y = sort_snodes(gwy$snode.id,gwy$circular)$nodelist
+	sx = sort_snodes(gwx$snode.id,gwx$circular)
+	sy = sort_snodes(gwy$snode.id,gwy$circular)
+	if (!is.null(split.ends)){
+		left.in = right.in = logical(max_id)
+		left.in[as.integer(names(split.ends$left))] = split.ends$left
+		right.in[as.integer(names(split.ends$right))] = split.ends$right
+		sn_x = split_walk_fragments(sx$nodelist,sx$circ,penalty,left.in,right.in)
+		sn_y = split_walk_fragments(sy$nodelist,sy$circ,penalty,left.in,right.in)
+	}else{
+		## Nodes with zero edit penalty cannot affect alignment scores.  In
+		## footprint-local comparisons on full graphs, most nodes are often outside
+		## use.nodes and have zero penalty, so strip them before the pairwise DP cost
+		## matrix calculation.
+		sn_x = lapply(sx$nodelist,function(x){x[penalty[abs(x)]!=0]})
+		sn_y = lapply(sy$nodelist,function(x){x[penalty[abs(x)]!=0]})
+	}
 	n = length(sn_x)
 	m = length(sn_y)
 	if (n<m){
@@ -544,26 +599,21 @@ edit_dist_cpp = function(gwx,gwy,graph=NULL,return_all = F,constpenalty=F,use.no
 }
 
 #just a wrapper function to calculate all distance pairs
-#if you want to skip calculating Hi-C (or long-read) distances, set pix.size=0 (or readL=0). To avoid edit distances, set edit_thresh=NA
-get_dists = function(gw,graph=NULL,target_region=NULL,pix.size=0,readL=0,edit_thresh=NA,use.nodes=NULL,depth=1,mc.cores=1){
+#if you want to skip calculating Hi-C (or long-read) distances, set pix.size=0 (or readL=0).
+get_dists = function(gw,graph=NULL,target_region=NULL,pix.size=0,readL=0,use.nodes=NULL,depth=1,mc.cores=1){
 	if (is.null(target_region)){target_region = gw[[1]]$footprint}
 	comppairs = CJ(i=seq_along(gw),j=seq_along(gw))[i>j]
 	if (pix.size>0){
-	message('Calculating Hi-C distances')
-	hic_dists = unlist(pbmclapply(1:nrow(comppairs),function(x){
+	hic_dists = unlist(mclapply(1:nrow(comppairs),function(x){
 		hic_kl(gw[[comppairs[x]$i]],gw[[comppairs[x]$j]],graph=graph,pix.size=pix.size,depth=depth,theta=2,target_region=target_region)},mc.cores=mc.cores))
 	comppairs[,hic:=hic_dists]
 	}
-	if (!is.na(edit_thresh)){
-	message('Calculating edit distances')
-	edit_dists = unlist(pbmclapply(1:nrow(comppairs),function(x){
+	edit_dists = unlist(mclapply(1:nrow(comppairs),function(x){
 		edit_dist_cpp(gw[[comppairs[x]$i]],gw[[comppairs[x]$j]],graph=graph,use.nodes=use.nodes)
 				   },mc.cores=mc.cores))
 	comppairs[,edit:=edit_dists]
-	}
 	if (readL>0){
-	message('Calculating long-read distances')
-	lr_dists = unlist(pbmclapply(1:nrow(comppairs),function(x){
+	lr_dists = unlist(mclapply(1:nrow(comppairs),function(x){
 		longread_kl(gw[[comppairs[x]$i]],gw[[comppairs[x]$j]],graph=graph,readL=readL,depth=depth,use.nodes=use.nodes)
 			   },mc.cores=mc.cores))
 	comppairs[,longread:=lr_dists]
@@ -612,7 +662,9 @@ paste_loose_ends_timed = function(gg,seed=NULL,maxtime=NULL){
 	  TimeoutException = function(e) {stop(e)}
 	)
 }
-paste_loose_ends <- function(gg, seed = NULL) {
+## foldback = FALSE: when only one loose end has residual CN left, leave it loose
+## (walks end there) instead of closing it with a foldback onto itself.
+paste_loose_ends <- function(gg, seed = NULL, foldback = TRUE) {
     work <- gr2dt(gg$loose)[cn > 0 & terminal == FALSE][, row := .I][, .(strand, node.cn, cn, index, node.id, orientation, row)]
     if (!nrow(work))
         return(gg$copy)
@@ -640,6 +692,10 @@ paste_loose_ends <- function(gg, seed = NULL) {
         ## Only one end remains: close it with a foldback.
         if (length(active) == 1L) {
             i <- active[1L]
+            if (!foldback) {
+                residual[i] <- 0L
+                next
+            }
             if (residual[i] %% 2L != 0L) {
                 stop(
                     "Cannot consume the final loose end: residual CN is odd."

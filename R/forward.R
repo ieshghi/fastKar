@@ -191,6 +191,22 @@ simulate_walks <- function(walks,tiled.target,widthdt,if.comps=F,mc.cores=1,if.s
     }
 }
 
+#' Hi-C contact density per bp^2 at genomic distance dist (bp), from the Rao 2014 distance spline
+#'
+#' The spline is trained on distances of 10 kb to 249 Mb. Below 10 kb its cubic (fmm) extrapolation
+#' diverges as dist -> 0 (~1e10 at 2 bp), which walks that revisit tiny nodes back to back can reach.
+#' Below the first knot we instead extend it as a power law with the slope at that knot (~ -1).
+#' @param dist numeric vector of distances in bp (> 0)
+#' @return numeric vector of contact densities
+distance_density = function(dist){
+    ldist = log(dist)
+    lmin = environment(fastKar::splineobj$distance_spline)$z$x[1]
+    out = fastKar::splineobj$distance_spline(pmax(ldist, lmin))
+    below = ldist < lmin
+    out[below] = out[below] + fastKar::splineobj$distance_spline(lmin, deriv = 1) * (ldist[below] - lmin)
+    exp(out)
+}
+
 #' Simulate Hi-C data using spline trained on Rao 2014 data
 #' 
 #' @param walk.dt data.table prepared by simulate_walks(), each row is a tile to simulate and columns are start,end,midpoints of the tile in local walk coordinates.
@@ -208,8 +224,8 @@ simulate_map<-  function(walk.dt,is.circular=FALSE,model=0){
     }
     if(model==0){
         maxval = 1e8
-        maxval_density = exp(fastKar::splineobj$distance_spline(log(maxval))) #density at maximum cutoff
-        dat.new[dist>0,value:=widthprod*exp(fastKar::splineobj$distance_spline(log(dist)))]
+        maxval_density = distance_density(maxval) #density at maximum cutoff
+        dat.new[dist>0,value:=widthprod*distance_density(dist)]
         dat.new[dist==0,value:=exp(fastKar::splineobj$diag_spline(log(widthprod)))]
         dat.new[dist>maxval,value:=widthprod*maxval_density*maxval/dist] #assume 1/distance scaling for values > 1e8
    }else {
@@ -369,8 +385,8 @@ simulate_diploid_map = function(tiled.target,if.comps=FALSE,depth=1,model=0,if.i
 
     if (model == 0){
         maxval = 1e8
-        maxval_density = exp(fastKar::splineobj$distance_spline(log(maxval)))
-        out.dat[same_chrom & dist>0,value:=2*widthprod*exp(fastKar::splineobj$distance_spline(log(dist)))]
+        maxval_density = distance_density(maxval)
+        out.dat[same_chrom & dist>0,value:=2*widthprod*distance_density(dist)]
         out.dat[same_chrom & dist==0,value:=2*exp(fastKar::splineobj$diag_spline(log(widthprod)))]
         out.dat[same_chrom & dist>maxval,value:=2*widthprod*maxval_density*maxval/dist]
         if (if.interchr){

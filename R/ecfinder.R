@@ -1,4 +1,4 @@
-fastKar_ecfinder = function(gg,ft,hic.res,true_hic_path,ec_fraction_threshold = 0.6,n_sample=100,n_ec = 10,figure_path = NULL,mc.cores=1,return_all=F,purity=1){
+fastKar_ecfinder = function(gg,ft,hic.res,true_hic_path,ec_fraction_threshold = 0.6,n_sample=100,n_ec = 10,figure_path = NULL,mc.cores=1,return_all=F,purity=1,depth_multiplier=1,rescale=F){
 	library(ggforce)
 	wholegenome = si2gr(hg_seqlengths(chr=FALSE)) %Q% (seqnames %in% c(1:22,'X','Y'))
 	if (is(ft,'character')){ft = streduce(parse.gr(ft))}
@@ -19,7 +19,8 @@ fastKar_ecfinder = function(gg,ft,hic.res,true_hic_path,ec_fraction_threshold = 
 		random_walks,function(x){amp_circular_fraction(x,ft)},mc.cores=mc.cores)))
 	# estimate depth of hi-c data and pick resolution to simulate at
 	ploidy = sum(gg$gr$cn*width(gg$gr))/sum(width(gg$gr))
-	depth = estimate.depthratio(true_hic_path,ploidy=ploidy,purity=purity)
+	is.chr = hic_is_chr(true_hic_path) #e.g. the NYU cell line mcools name chromosomes 'chr1', ...; graphs don't
+	depth = depth_multiplier*estimate.depthratio(true_hic_path,ploidy=ploidy,purity=purity,if.chr=is.chr)
 	hictype = tools::file_ext(true_hic_path)
 	if (hic.res<0){ #if hic.res < 0 this is asking for a number of bins to cover the footprint
 		hic.res = sum(width(ft_context))/abs(hic.res)
@@ -29,7 +30,11 @@ fastKar_ecfinder = function(gg,ft,hic.res,true_hic_path,ec_fraction_threshold = 
 	dists = abs(log10(avail_res) - log10(hic.res))
 	hic.res = avail_res[dists==min(dists)]
 	# load hic data
-	if (hictype=='mcool'){true_hic = cooler(true_hic_path,gr=ft_context,res=hic.res)
+	if (hictype=='mcool'){
+		if (is.chr){
+			true_hic = cooler(true_hic_path,gr=gr.chr(ft_context),res=hic.res)
+			true_hic = gM(gr=gr.nochr(true_hic$gr),dat=true_hic$dat)
+		} else{true_hic = cooler(true_hic_path,gr=ft_context,res=hic.res)}
 	} else{true_hic = straw(true_hic_path,gr=ft_context,res=hic.res)}
 	hic.gr = true_hic$gr
 	true_hic = rebin_matrix(true_hic,hic.gr) #make sure the matrix matches future matrices (basically just adds in 0s)
@@ -42,6 +47,15 @@ fastKar_ecfinder = function(gg,ft,hic.res,true_hic_path,ec_fraction_threshold = 
 	hsr_sims = mclapply(hsr_solns,simfun,mc.cores=mc.cores)
 	ecdna_sims = mclapply(ecdna_solns,simfun,mc.cores=mc.cores)
 	random_sims = mclapply(random_walks,simfun,mc.cores=mc.cores)
+	# rescale = TRUE: the genome-wide depth estimate can be off locally, so scale every sim by one shared
+	# ratio = observed total / median total over all hypothesis and random sims (as in bestfit_search)
+	ratio = 1
+	if (rescale){
+		ratio = sim_depth_ratio(true_hic,c(hsr_sims,ecdna_sims,random_sims),mc.cores=mc.cores)
+		hsr_sims = lapply(hsr_sims,function(s){s*ratio})
+		ecdna_sims = lapply(ecdna_sims,function(s){s*ratio})
+		random_sims = lapply(random_sims,function(s){s*ratio})
+	}
 	#simulate noise, 1 sample per random walk solution and n_sample for each ecDNA/HSR solution
 	n_ec_sample = n_sample %/% n_ec
 	n_hsr_sample = n_sample %/% n_hsr
@@ -52,33 +66,30 @@ fastKar_ecfinder = function(gg,ft,hic.res,true_hic_path,ec_fraction_threshold = 
 					mc.cores=mc.cores),recursive=F)
 	random_noisy_sims = mclapply(random_sims,function(x){make_noisydat(x)[[1]]},mc.cores=mc.cores)
 	#
-	sum_ratio_ec = mean(unlist(lapply(ec_noisy_sims,function(x){sum(x$value)})))/sum(true_hic$value)
-	sum_ratio_hsr = mean(unlist(lapply(hsr_noisy_sims,function(x){sum(x$value)})))/sum(true_hic$value)
-	scaling_ratio = mean(c(sum_ratio_ec,sum_ratio_hsr))
-	true_hic_scaled = true_hic*scaling_ratio
-	#
 	message('Scoring karyotypes')
 	area0 = median(width(ecdna_sims[[1]]$gr))^2
 	# ecDNA score is mean likelihood of ecDNA - likelihood of HSR
 	nll = function(sims,data){
-		min(unlist(lapply(sims,function(sim){compdats(data,sim$dat,area0=area0)})))}
+		mean(unlist(lapply(sims,function(sim){compdats(data,sim$dat,area0=area0)})))}
 	combined_llr = function(x){nll(hsr_sims,x)-nll(ecdna_sims,x)} 
 	# score all samples and true Hi-C
 	random_scores = mclapply(random_noisy_sims,combined_llr,mc.cores=mc.cores) %>% unlist
 	ec_scores = mclapply(ec_noisy_sims,combined_llr,mc.cores=mc.cores) %>% unlist
 	hsr_scores = mclapply(hsr_noisy_sims,combined_llr,mc.cores=mc.cores) %>% unlist
-	true_llr = combined_llr(true_hic_scaled$dat)
+	true_llr = combined_llr(true_hic$dat)
 	#
 	dt = rbind(data.table(score=random_scores,type='Random',circle = random_circ),
 		   data.table(score=ec_scores,type='ecDNA'),
 		   data.table(score=hsr_scores,type='HSR'),
 		   fill=T)
-	ecdna_nll = unlist(lapply(ecdna_sims,function(sim){compdats(true_hic_scaled$dat,sim$dat,area0=area0)}))
+	ecdna_nll = unlist(lapply(ecdna_sims,function(sim){compdats(true_hic$dat,sim$dat,area0=area0)}))
 	best_ecdna_ix = which.min(ecdna_nll)
-	hsr_nll = unlist(lapply(hsr_sims,function(sim){compdats(true_hic_scaled$dat,sim$dat,area0=area0)}))
+	hsr_nll = unlist(lapply(hsr_sims,function(sim){compdats(true_hic$dat,sim$dat,area0=area0)}))
 	best_hsr_ix = which.min(hsr_nll)
 	likrat_gm = compmaps(true_hic,hsr_sims[[best_hsr_ix]]) - compmaps(true_hic,ecdna_sims[[best_ecdna_ix]])
 	likrat_max = max(abs(likrat_gm$value))
+	sum_ratio = sum(true_hic$value)/sum(hsr_sims[[best_hsr_ix]]$value)
+	cmax = 1/5*max(hsr_sims[[best_hsr_ix]]$value) #pick some shared maximum color for Hi-C
 	# make plots. First
 	ppdf(plot(ggplot(dt,aes(x=type,y=score))+
 		  geom_sina()+
@@ -86,21 +97,21 @@ fastKar_ecfinder = function(gg,ft,hic.res,true_hic_path,ec_fraction_threshold = 
 	  ),width=5,height=4,paste0(figure_path,'/true_hic_topology_call'))
 	#
 	ppdf(plot(c(gg$gtrack(y.field='cn'),
-		    true_hic_scaled$gtrack(name='True Hi-C'),
-		    hsr_sims[[best_hsr_ix]]$gtrack(name='HSR Hi-C'),
-		    ecdna_sims[[best_ecdna_ix]]$gtrack(name='ecDNA Hi-C'),
+		    true_hic$gtrack(name='True Hi-C',cmap.max=cmax),
+		    hsr_sims[[best_hsr_ix]]$gtrack(name='HSR Hi-C',cmap.max=cmax),
+		    ecdna_sims[[best_ecdna_ix]]$gtrack(name='ecDNA Hi-C',cmap.max=cmax),
 		    likrat_gm$gtrack(name='Loglik-diff EC - HSR',
 				     colormap=c('blue','white','red'),
 				     clim=c(-likrat_max,likrat_max))
 		    ),ft_context),
-	     width=5,height=20,paste0(figure_path,'/true_hic_vs_training'))
+	     width=4,height=20,paste0(figure_path,'/true_hic_vs_training'))
 	#
 	ppdf(plot(c(hsr_solns[[1]]$gtrack(name='HSR'),
 		    ecdna_solns[[1]]$gtrack(name='ecDNA'),
 		    random_walks[[1]]$gtrack(name='Random'),
 		    gg$gtrack(name='gGraph',y.field='cn')),
 		  ft_context),
-	     width=7,height=25,paste0(figure_path,'/training_examples'))
+	     width=5,height=20,paste0(figure_path,'/training_examples'))
 	#
 	hsr_max = max(dt[type=='HSR']$score)
 	ec_min = min(dt[type=='ecDNA']$score)
@@ -114,11 +125,11 @@ fastKar_ecfinder = function(gg,ft,hic.res,true_hic_path,ec_fraction_threshold = 
 	circ_cor = cor(dt_r$score,dt_r$circle)
 	ec_hsr_sep = ks.test(dt[type=='HSR']$score,dt[type=='ecDNA']$score)$p.value
 	if (ec_hsr_sep < 1e-2 & true_llr > ec_min){
-		return(list(call='ecDNA',sep_pval = ec_hsr_sep,circ_cor = circ_cor,ec_score_true = true_llr,score_dt=dt,scaling_ratio=scaling_ratio))
+		return(list(call='ecDNA',sep_pval = ec_hsr_sep,circ_cor = circ_cor,ec_score_true = true_llr,score_dt=dt,sum_ratio=sum_ratio,depth_ratio=ratio))
 	}else if (ec_hsr_sep < 1e-2 & true_llr < hsr_max){
-		return(list(call='CI',sep_pval = ec_hsr_sep,circ_cor = circ_cor,ec_score_true = true_llr,score_dt=dt,scaling_ratio=scaling_ratio))
+		return(list(call='CI',sep_pval = ec_hsr_sep,circ_cor = circ_cor,ec_score_true = true_llr,score_dt=dt,sum_ratio=sum_ratio,depth_ratio=ratio))
 	}else{
-		return(list(call='None',sep_pval = ec_hsr_sep,circ_cor = circ_cor,ec_score_true = true_llr,score_dt=dt,scaling_ratio=scaling_ratio))
+		return(list(call='None',sep_pval = ec_hsr_sep,circ_cor = circ_cor,ec_score_true = true_llr,score_dt=dt,sum_ratio=sum_ratio,depth_ratio=ratio))
 	}
 }
 
@@ -229,8 +240,10 @@ boil_greedy = function(gg,ft,N,n_solns_try=1,mc.cores=1){
 	if (n_solns_try>1){
 		output_rand = mclapply(1:n_solns_try,function(x){greedypeel(gg,circles,deterministic=F)},mc.cores=mc.cores)
 		output = c(list(output),output_rand)
+		return(output[!duplicated(unlist(lapply(output,'[[','hash')))])
+	}else{
+		return(output)
 	}
-	return(output[!duplicated(unlist(lapply(output,'[[','hash')))])
 }
 
 #calculate entropy of the given nodes as distributed in the given gwalk object
@@ -286,4 +299,11 @@ hic_res = function(path) {
     		reses= cooler_details.dt[!is.na(name),]$name %>% sort()
 	}
 	return(reses)
+}
+
+# TRUE if an mcool names its chromosomes 'chr1', ... (.hic files are assumed not to)
+hic_is_chr = function(path) {
+	if (tools::file_ext(path) != 'mcool') return(FALSE)
+	chroms = rhdf5::h5read(path, paste0('/resolutions/', hic_res(path)[1], '/chroms/name'))
+	any(grepl('^chr', chroms))
 }

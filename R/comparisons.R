@@ -364,7 +364,29 @@ minimal_readlength = function(gw1,gw2){
 	return(min(midnodes$width_sum))
 }
 
+.same_gr_bins = function(gr1, gr2){
+	length(gr1)==length(gr2) &&
+		identical(as.character(seqnames(gr1)), as.character(seqnames(gr2))) &&
+		identical(start(gr1), start(gr2)) &&
+		identical(end(gr1), end(gr2))
+}
+
 rebin_matrix = function(gm,target_gr,writezeros=T){
+	## Fast path: if the gMatrix is already defined on the requested bins, avoid
+	## the relatively expensive disjoin()/agg() calls.  Still fill missing pixels
+	## with explicit zeroes when needed so compdats() sees identical templates.
+	if (.same_gr_bins(gm$gr,target_gr)){
+		outdt = make_template_dat(target_gr)
+		same_coordinates <- nrow(gm$dat) == nrow(outdt) && identical(gm$dat$i,  outdt$i) && identical(gm$dat$j,  outdt$j) && identical(gm$dat$id, outdt$id)
+		if (same_coordinates){
+			return(gm)
+		}
+		if (all(c('i','j','value') %in% names(gm$dat)) && !anyDuplicated(gm$dat[,.(i,j)])){
+			setkey(outdt,i,j)
+			outdt[gm$dat, on = .(i, j), value := i.value]
+			return(gM(gr=target_gr,dat=outdt))
+		}
+	}
 	gm2 = gm$disjoin(target_gr)$agg(target_gr)
 	outdt = make_template_dat(target_gr)
 	same_coordinates <- nrow(gm2$dat) == nrow(outdt) && identical(gm2$dat$i,  outdt$i) && identical(gm2$dat$j,  outdt$j) && identical(gm2$dat$id, outdt$id)

@@ -97,7 +97,7 @@ chromosomes, exactly where the translocation junctions route contacts.
 
 ```r
 d <- get_dists(walks_gw, graph = gg,
-               pix.size = 1e5, readL = 3e6, edit_thresh = 0)
+               pix.size = 1e5, readL = 3e6)
 # returns a data.table of pairwise (edit, hic, longread) distances
 ```
 
