@@ -1,4 +1,4 @@
-fastKar_ecfinder = function(gg,ft,hic.res,true_hic_path,ec_fraction_threshold = 0.6,n_sample=100,n_ec = 10,figure_path = NULL,mc.cores=1,return_all=F,purity=1,rescale=F){
+fastKar_ecfinder = function(gg,ft,hic.res,true_hic_path,ec_fraction_threshold = 0.6,n_sample=100,n_ec = 10,n_circle_samples=1000,n_hsr_samples=5000,figure_path = NULL,mc.cores=1,return_all=F,purity=1,rescale=F){
 	library(ggforce)
 	wholegenome = si2gr(hg_seqlengths(chr=FALSE)) %Q% (seqnames %in% c(1:22,'X','Y'))
 	if (is(ft,'character')){ft = streduce(parse.gr(ft))}
@@ -6,12 +6,12 @@ fastKar_ecfinder = function(gg,ft,hic.res,true_hic_path,ec_fraction_threshold = 
 	event_nodes = (gg$nodes$gr %&% ft)$node.id
 	message('Sampling and generating solutions')
 	# generate HSR and ecDNA solutions
-	ecdna_solns = boil_greedy(gg=gg,ft=ft,N=100,n_solns_try=n_ec,mc.cores=mc.cores)
+	ecdna_solns = boil_greedy(gg=gg,ft=ft,N=n_circle_samples,n_solns_try=n_ec,mc.cores=mc.cores) #karyotypes sampled to find circles
 	ecdna_circ = unname(unlist(lapply(
 		ecdna_solns,function(x){amp_circular_fraction(x,ft)})))
 	ecdna_solns = ecdna_solns[ecdna_circ > ec_fraction_threshold]
 	if (!length(ecdna_solns)){return(list(call='CI', reason='No good ecDNA solutions'))}
-	hsr_solns = squeeze(gg=gg,ft=ft,N=1000,k_return=n_ec,verbose = F,mc.cores=mc.cores)
+	hsr_solns = squeeze(gg=gg,ft=ft,N=n_hsr_samples,k_return=n_ec,verbose = F,mc.cores=mc.cores) #karyotypes sampled to pick the HSR solutions from
 	n_ec = length(ecdna_solns)
 	n_hsr = length(hsr_solns)
 	random_walks = sample.gwalks(gg,n_sample,mc.cores=mc.cores,verbose = F)
