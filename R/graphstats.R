@@ -664,8 +664,20 @@ paste_loose_ends_timed = function(gg,seed=NULL,maxtime=NULL){
 }
 ## foldback = FALSE: when only one loose end has residual CN left, leave it loose
 ## (walks end there) instead of closing it with a foldback onto itself.
-paste_loose_ends <- function(gg, seed = NULL, foldback = TRUE) {
-    work <- gr2dt(gg$loose)[cn > 0 & terminal == FALSE][, row := .I][, .(strand, node.cn, cn, index, node.id, orientation, row)]
+## region: if given (GRanges), only loose ends on nodes overlapping it are pasted, to each other;
+## all other loose ends stay loose. NULL pastes genome-wide.
+paste_loose_ends <- function(gg, seed = NULL, foldback = TRUE, region = NULL) {
+    if (is.null(region)) {
+        lo <- gg$loose
+    } else {
+        ids <- unique((gg$nodes$gr %&% region)$node.id)
+        if (!length(ids))
+            return(gg$copy)
+        lo <- gg$nodes[ids]$loose
+    }
+    if (!length(lo))
+        return(gg$copy)
+    work <- gr2dt(lo)[cn > 0 & terminal == FALSE][, row := .I][, .(strand, node.cn, cn, index, node.id, orientation, row)]
     if (!nrow(work))
         return(gg$copy)
     work[, cn := as.integer(cn)]
