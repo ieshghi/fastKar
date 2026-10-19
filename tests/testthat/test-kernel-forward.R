@@ -40,7 +40,8 @@ dense_lift = function(orig, width, circular = FALSE, model = 0, n_ref) {
     Tm = matrix(0, n, n_ref)
     ok = !is.na(orig)
     Tm[cbind(which(ok), orig[ok])] = 1
-    R = t(Tm) %*% S %*% Tm
+    ## base::`%*%`: gUtils (attached via Depends) masks %*% with a GRanges operator
+    R = base::`%*%`(base::`%*%`(t(Tm), S), Tm)
     tmpl = make_template_dat_cpp(data.frame(width = rep(1, n_ref)))
     R[cbind(tmpl$i, tmpl$j)]
 }
