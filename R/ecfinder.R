@@ -72,7 +72,8 @@ fastKar_ecfinder = function(gg,ft,hic.res,true_hic_path,ec_fraction_threshold = 
 	#
 	message('Scoring karyotypes')
 	area0 = median(width(ecdna_sims[[1]]$gr))^2
-	# ecDNA score is best-fit (min) NLL over HSR solutions - best-fit NLL over ecDNA solutions
+	# ecDNA score is mean NLL over HSR solutions - mean NLL over ecDNA solutions (mean, not best-fit min: as accurate or
+	# better in the 2026-10-19 K-sweep on simulated truths, with fewer CI truths called ecDNA at large n_ec)
 	# pixel tables pulled out once: gm$dat copies the table on every access
 	hsr_dats = lapply(hsr_sims,function(sim){sim$dat})
 	ecdna_dats = lapply(ecdna_sims,function(sim){sim$dat})
@@ -80,11 +81,12 @@ fastKar_ecfinder = function(gg,ft,hic.res,true_hic_path,ec_fraction_threshold = 
 	nll = function(dats,data,leave_out=NULL){
 		nlls = unlist(lapply(dats,function(d){compdats(data,d,area0=area0)}))
 		if (length(leave_out)){nlls = nlls[-leave_out]}
-		min(nlls)}
+		mean(nlls)}
 	combined_llr = function(x,leave_hsr=NULL,leave_ec=NULL){nll(hsr_dats,x,leave_hsr)-nll(ecdna_dats,x,leave_ec)}
 	# noisy samples are scored without the solution that generated them, since the real data's karyotype is not
-	# among the solutions either; only done with > 3 solutions on each side, so the class min stays meaningful
-	leave_out = n_ec > 3 & n_hsr > 3
+	# among the solutions either; done whenever each side has > 1 solution (switching on at > 3 left the null
+	# thresholds too far out for 2-3 solutions, so those calls mostly went to None in the K-sweep)
+	leave_out = n_ec > 1 & n_hsr > 1
 	ec_src = rep(seq_len(n_ec),each=n_ec_sample)
 	hsr_src = rep(seq_len(n_hsr),each=n_hsr_sample)
 	# score all samples and true Hi-C
