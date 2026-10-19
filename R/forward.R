@@ -13,17 +13,22 @@
 #' @param model sets whether to simulate Hi-C (model = 0) or long-read data (model = length of reads in bp)
 #' @param if.interchr boolean, sets whether to simulate interchromosomal contacts (default is TRUE). If if.sum = FALSE, then this is set to FALSE. 
 #' @param gm.out boolean, chooses whether to return a gMatrix or a data.table (defaults to TRUE, returning a gMatrtix)
+#' @param prepped optional result of prep_for_sim() for this graph, target_region and pix.size, reused instead of tiling again (target_region, pix.size and if.comps are then not used for tiling)
 #' @return either a gMatrix (gm.out = if.sum = T), a list of gMatrices (gm.out = T, if.sum = F), a data.table (gm.out = F, if.sum = T), or a list of data.tables (gm.out = if.sum = F)
-forward_simulate <- function(walks,target_region = NULL,pix.size=1e5,if.comps=FALSE,mc.cores=1,if.sum=TRUE,depth=1,purity=1,model=0,if.interchr=T,gm.out=T){
+forward_simulate <- function(walks,target_region = NULL,pix.size=1e5,if.comps=FALSE,mc.cores=1,if.sum=TRUE,depth=1,purity=1,model=0,if.interchr=T,gm.out=T,prepped=NULL){
     if (!is.numeric(purity) || length(purity) != 1 || is.na(purity) || purity < 0 || purity > 1){
         stop('purity must be a single numeric value between 0 and 1')
     }
     if (purity < 1 && !if.sum){
         stop('purity < 1 is currently supported only when if.sum = TRUE')
     }
-    if (is.null(target_region)){target_region = walks$footprint}
     haploid.depth = depth/2
-    prepped.data = prep_for_sim(walks,target_region,pix.size,if.comps)
+    if (is.null(prepped)){
+        if (is.null(target_region)){target_region = walks$footprint}
+        prepped.data = prep_for_sim(walks,target_region,pix.size,if.comps)
+    } else{
+        prepped.data = prepped
+    }
     if (purity == 1){
         return(simulate_walks(walks,prepped.data$tiled.target,prepped.data$widthdt,if.comps,mc.cores,if.sum,haploid.depth,model,if.interchr,gm.out))
     }
@@ -77,11 +82,23 @@ prep_for_sim = function(walks,target_region=NULL,pix.size=1e5,if.comps=F){
     #If target_region extends outside the supplied graph, keep those extra tiles with
     #node.id = NA and tumor cn = 0 so a diploid normal component can still be simulated
     #on the full requested region without rebinning.
-    nodes.in.target = streduce(nodesgr %&% target_region)
-    merged = gr.merge(nodes.in.target,target_region[,c()],all=T)
-    outside.target = streduce(merged[is.na(merged$query.id)])
+    # parts of the target not covered by any node, within the graph's seqlengths (the reference took
+    # these from the no-query rows of gr.merge(streduce(nodes %&% target), target, all = TRUE))
+    bare = function(g) GenomicRanges::GRanges(as.character(GenomicRanges::seqnames(g)), IRanges::ranges(g))
+    target.ns = bare(target_region)
+    nodes.ns = bare(nodesgr)
+    any.in.target = any(IRanges::overlapsAny(nodes.ns, target.ns))
+    gaps.ns = suppressWarnings(GenomicRanges::setdiff(target.ns, nodes.ns))
+    sl = GenomeInfoDb::seqlengths(nodesgr)[as.character(GenomicRanges::seqnames(gaps.ns))]
+    sl[is.na(sl)] = Inf
+    keep = GenomicRanges::start(gaps.ns) <= sl
+    gaps.ns = gaps.ns[keep]
+    sl = sl[keep]
+    over = GenomicRanges::end(gaps.ns) > sl
+    if (any(over)) GenomicRanges::end(gaps.ns)[over] = as.integer(sl[over])
+    outside.target = streduce(gaps.ns)
     tiled.parts = list()
-    if (length(nodes.in.target)){
+    if (any.in.target){
         tiled.parts[[length(tiled.parts)+1]] = gr2dt(gr.merge(gr.tile(target_region,pix.size),nodesgr))[,.(start,end,seqnames,width,node.id,cn)]
     }
     if (length(outside.target)){
