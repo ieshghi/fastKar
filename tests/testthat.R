@@ -1,4 +1,4 @@
 library(testthat)
-library(fastKarOptim)
+library(fastKar)
 
-test_check("fastKarOptim")
+test_check("fastKar")

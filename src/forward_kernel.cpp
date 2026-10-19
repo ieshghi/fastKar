@@ -6,7 +6,7 @@
 //
 // The Hi-C distance model is R's fmm splinefun (stats splines.c, spline_eval, method 3) on
 // log(distance), with the power-law extension below the first knot used by distance_density().
-// Spline coefficients are passed in from fastKarOptim::splineobj at run time.
+// Spline coefficients are passed in from fastKar::splineobj at run time.
 
 #include <Rcpp.h>
 #include <vector>

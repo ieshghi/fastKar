@@ -11,7 +11,6 @@ sum_matrices(matrices)
 }
 \value{
 single data.table with same columns, with value column corresponding to the sum of all inputs for a given id
-NOTE: could be sped up with cpp
 }
 \description{
 Sums the contacts coming from many gMatrix data.tables as fast as possible using the 'id' column.

@@ -6,7 +6,7 @@
 #' @param target_region a gRange corresponding to the region of interest for the simulation. If left blank, assume the footprint of the walks.
 #' @param pix.size resolution of the simulation tiles, default is 100kb. If set to 0, each tile corresponds to half a node in the gGraph.
 #' @param if.comps boolean setting whether or not to simulate compartments (defaults to FALSE)
-#' @param mc.cores accepted for compatibility (defaults to 1). The walk kernel runs single-threaded in C++, where forking over walks costs more than it saves (bench/bench_forward_forks.R); results do not depend on it. Parallelize over candidates instead.
+#' @param mc.cores accepted for compatibility (defaults to 1). The walk kernel runs single-threaded in C++, where forking over walks costs more than it saves; results do not depend on it. Parallelize over candidates instead.
 #' @param if.sum boolean deciding whether to sum the simulated Hi-C signal from all walks or whether to return a list of Hi-C maps (defaults to TRUE)
 #' @param depth depth of the simulated Hi-C data, in X coverage (defaults to 1)
 #' @param purity tumor purity/fraction of the sample explained by the supplied walks (defaults to 1). If less than 1, the remaining fraction is simulated as a diploid reference genome over the same context and added to the tumor simulation.
@@ -116,7 +116,7 @@ prep_for_sim = function(walks,target_region=NULL,pix.size=1e5,if.comps=F){
         tiled.target$compartment = 'A'
     }else{
         stop('Compartments not supported in this version')
-        comps.gr = gr.nochr(fastKarOptim::compartment_lookup)
+        comps.gr = gr.nochr(fastKar::compartment_lookup)
         tiled.target = eval_comps(gr.tile(target_region,pix.size),comps.gr) #need to update eval_comps to dt mode
     }
     return(list(tiled.target=tiled.target,widthdt=widthdt))
@@ -128,7 +128,7 @@ prep_for_sim = function(walks,target_region=NULL,pix.size=1e5,if.comps=F){
 #' @param tiled.target a data.table produced by prep_for_sim(), containing target tile coordinates, tile.ids, and corresponding node.ids, as well as CN and width
 #' @param widthdt a data.table produced by prep_for_sim(), containing width data for all the nodes in the gGraph simulated here.
 #' @param if.comps boolean setting whether or not to simulate compartments (defaults to FALSE)
-#' @param mc.cores accepted for compatibility (defaults to 1). The walk kernel runs single-threaded in C++, where forking over walks costs more than it saves (bench/bench_forward_forks.R); results do not depend on it. Parallelize over candidates instead.
+#' @param mc.cores accepted for compatibility (defaults to 1). The walk kernel runs single-threaded in C++, where forking over walks costs more than it saves; results do not depend on it. Parallelize over candidates instead.
 #' @param if.sum boolean deciding whether to sum the simulated Hi-C signal from all walks or whether to return a list of Hi-C maps (defaults to TRUE)
 #' @param depth depth of the simulated Hi-C data, in X coverage (defaults to 1)
 #' @param model sets whether to simulate Hi-C (model = 0) or long-read data (model = length of reads in bp)
@@ -171,7 +171,7 @@ simulate_walks <- function(walks,tiled.target,widthdt,if.comps=F,mc.cores=1,if.s
         acc = walk_acc(seq_along(walk.cn), walk.cn)
         interchr = if.interchr & model==0
         total.counts = setDT(forward_assemble_cpp(as.numeric(tiled.target$width), as.numeric(tiled.target$cn), acc, depth,
-                                                  fastKarOptim::interchrom_density, interchr))
+                                                  fastKar::interchrom_density, interchr))
         if (interchr){
             setattr(total.counts,'sorted','id') # calculate_interchrom() returned a table keyed by id
         }
@@ -250,13 +250,13 @@ walk_rows = function(snode.id,tiled.target,widthdt){
 
 #' Model constants for the C++ walk kernel, read from the package data at call time
 forward_kernel_args = function(model){
-    f = fastKarOptim::splineobj$distance_spline
+    f = fastKar::splineobj$distance_spline
     z = environment(f)$z
     lmin = z$x[1]
     list(z = z, lmin = lmin, slope = f(lmin, deriv = 1), maxval = 1e8,
          maxval_density = distance_density(1e8), model = model,
-         lr_denom = if (model > 0) 10*min(fastKarOptim::small_lookup[d>0]$d)^2 else 1,
-         diagf = fastKarOptim::splineobj$diag_spline)
+         lr_denom = if (model > 0) 10*min(fastKar::small_lookup[d>0]$d)^2 else 1,
+         diagf = fastKar::splineobj$diag_spline)
 }
 
 #' Pixel id of reference pixel (i, j), i <= j, on an n-tile template: its row in make_template_dat()
@@ -278,10 +278,10 @@ pixel_id = function(i, j, n){
 #' @return numeric vector of contact densities
 distance_density = function(dist){
     ldist = log(dist)
-    lmin = environment(fastKarOptim::splineobj$distance_spline)$z$x[1]
-    out = fastKarOptim::splineobj$distance_spline(pmax(ldist, lmin))
+    lmin = environment(fastKar::splineobj$distance_spline)$z$x[1]
+    out = fastKar::splineobj$distance_spline(pmax(ldist, lmin))
     below = ldist < lmin
-    out[below] = out[below] + fastKarOptim::splineobj$distance_spline(lmin, deriv = 1) * (ldist[below] - lmin)
+    out[below] = out[below] + fastKar::splineobj$distance_spline(lmin, deriv = 1) * (ldist[below] - lmin)
     exp(out)
 }
 
@@ -304,10 +304,10 @@ simulate_map<-  function(walk.dt,is.circular=FALSE,model=0){
         maxval = 1e8
         maxval_density = distance_density(maxval) #density at maximum cutoff
         dat.new[dist>0,value:=widthprod*distance_density(dist)]
-        dat.new[dist==0,value:=exp(fastKarOptim::splineobj$diag_spline(log(widthprod)))]
+        dat.new[dist==0,value:=exp(fastKar::splineobj$diag_spline(log(widthprod)))]
         dat.new[dist>maxval,value:=widthprod*maxval_density*maxval/dist] #assume 1/distance scaling for values > 1e8
    }else {
-        min.res = min(fastKarOptim::small_lookup[d>0]$d)
+        min.res = min(fastKar::small_lookup[d>0]$d)
         dat.new[,value:=widthprod/(10*min.res^2)*(exp(-dist/model))]
         #some analytical model for short/long reads with readlength as an input parameter
    }
@@ -348,7 +348,7 @@ calculate_interchrom <- function(intra.dts,walk.dts,tiled.target,walk.cn,if.comp
     template = intra.dts[[1]]
     if (!if.comps && same_pixels(intra.dts) && !is.unsorted(template$id, strictly = TRUE)){
         # all maps on one template: plain vector sums, no merge
-        raw_density = fastKarOptim::interchrom_density
+        raw_density = fastKar::interchrom_density
         cn = tiled.target$cn
         intra = Reduce(`+`, lapply(intra.dts, `[[`, 'value'))
         out = template[,.(i,j,id)]
@@ -360,10 +360,10 @@ calculate_interchrom <- function(intra.dts,walk.dts,tiled.target,walk.cn,if.comp
     target.dt = data.table::copy(tiled.target)[,.(orig.id=tile.id,cn,compartment)]
     template = data.table::copy(intra.dts[[1]])
     if (if.comps){
-        lookup_interchr = fastKarOptim::small_lookup[d<0]
+        lookup_interchr = fastKar::small_lookup[d<0]
         template[,raw_density:=lookup_interchr[interaction==this.interaction]$tot_density/1500,by=this.interaction]
     }else{
-        raw_density= fastKarOptim::interchrom_density
+        raw_density= fastKar::interchrom_density
     }
     # use one-shot calculation formula: n_ij = rate * widthprod * (CN_i*CN_j)
     mydat = data.table::copy(template)[,titj:=target.dt$cn[i]*target.dt$cn[j]] 
@@ -464,7 +464,7 @@ simulate_diploid_map = function(tiled.target,if.comps=FALSE,depth=1,model=0,if.i
         kern = forward_kernel_args(0)
         value = forward_diploid_cpp(as.integer(chrom), as.numeric((tiled.target$start+tiled.target$end)/2), as.numeric(tiled.target$width),
                                     kern$z, kern$lmin, kern$slope, kern$maxval, kern$maxval_density,
-                                    if.interchr, fastKarOptim::interchrom_density, depth, kern$diagf)
+                                    if.interchr, fastKar::interchrom_density, depth, kern$diagf)
         out.dat = setDT(forward_assemble_cpp(as.numeric(tiled.target$width), numeric(0), value, 1, 0, FALSE))
     } else{
         # reference code path (errors: same_chrom is looked up as a variable by data.table)
@@ -472,7 +472,7 @@ simulate_diploid_map = function(tiled.target,if.comps=FALSE,depth=1,model=0,if.i
         tiled.target[,mid:=(start+end)/2]
         out.dat[,same_chrom:=tiled.target$seqnames[i]==tiled.target$seqnames[j]]
         out.dat[,dist:=abs(tiled.target$mid[j]-tiled.target$mid[i])]
-        min.res = min(fastKarOptim::small_lookup[d>0]$d)
+        min.res = min(fastKar::small_lookup[d>0]$d)
         out.dat[same_chrom,value:=2*widthprod/(10*min.res^2)*(exp(-dist/model))]
         out.dat[is.na(value),value:=0]
         out.dat[,value:=depth*value]

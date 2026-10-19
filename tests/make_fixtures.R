@@ -1,11 +1,11 @@
-## Builds the input fixtures for the fastKarOptim equivalence tests and benchmarks.
-## Run with the reference package loaded (inputs only; outputs are computed live by the oracle).
+## Builds the input fixtures for the fixture-based property tests.
+## Inputs only (graphs, footprints, karyotypes); outputs are computed live by the tests.
 ##   Rscript tests/make_fixtures.R
 suppressMessages({
     library(data.table); setDTthreads(1)
-    pkgload::load_all('~/git/fastKar_oracle', quiet = TRUE)
+    pkgload::load_all('~/git/fastKar', quiet = TRUE)
 })
-out_dir = '~/git/fastKar_optim/tests/testthat/fixtures'
+out_dir = '~/git/fastKar/tests/testthat/fixtures'
 nkar = 8
 
 ## karyotypes stored as plain lists so fixtures stay small and package-independent

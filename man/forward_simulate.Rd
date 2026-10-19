@@ -15,7 +15,8 @@ forward_simulate(
   purity = 1,
   model = 0,
   if.interchr = T,
-  gm.out = T
+  gm.out = T,
+  prepped = NULL
 )
 }
 \arguments{
@@ -27,7 +28,7 @@ forward_simulate(
 
 \item{if.comps}{boolean setting whether or not to simulate compartments (defaults to FALSE)}
 
-\item{mc.cores}{number of cores to use in parallel simulation (defaults to 1)}
+\item{mc.cores}{accepted for compatibility (defaults to 1). The walk kernel runs single-threaded in C++, where forking over walks costs more than it saves; results do not depend on it. Parallelize over candidates instead.}
 
 \item{if.sum}{boolean deciding whether to sum the simulated Hi-C signal from all walks or whether to return a list of Hi-C maps (defaults to TRUE)}
 
@@ -40,6 +41,8 @@ forward_simulate(
 \item{if.interchr}{boolean, sets whether to simulate interchromosomal contacts (default is TRUE). If if.sum = FALSE, then this is set to FALSE.}
 
 \item{gm.out}{boolean, chooses whether to return a gMatrix or a data.table (defaults to TRUE, returning a gMatrtix)}
+
+\item{prepped}{optional result of prep_for_sim() for this graph, target_region and pix.size, reused instead of tiling again (target_region, pix.size and if.comps are then not used for tiling)}
 }
 \value{
 either a gMatrix (gm.out = if.sum = T), a list of gMatrices (gm.out = T, if.sum = F), a data.table (gm.out = F, if.sum = T), or a list of data.tables (gm.out = if.sum = F)

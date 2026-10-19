@@ -58,7 +58,7 @@ test_that('per-walk maps plus the interchromosomal term sum to the if.sum = TRUE
         per = fs(fx$gw[[1]], target_region = fx$ft, pix.size = pix, depth = depth, if.sum = FALSE, gm.out = FALSE)
         tt = total$gr
         tm = make_template_dat(tt)
-        inter = depth / 2 * tm$widthprod * fastKarOptim::interchrom_density * tt$cn[tm$i] * tt$cn[tm$j]
+        inter = depth / 2 * tm$widthprod * fastKar::interchrom_density * tt$cn[tm$i] * tt$cn[tm$j]
         s = Reduce(`+`, lapply(per, function(d) d[order(id)]$value))
         expect_equal(s + inter, vals(total), tolerance = 1e-12, info = nm)
         intra = vals(fs(fx$gw[[1]], target_region = fx$ft, pix.size = pix, depth = depth, if.interchr = FALSE, gm.out = FALSE))

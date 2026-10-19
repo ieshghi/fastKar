@@ -22,8 +22,8 @@ test_that('C++ distance density matches distance_density() on a dense log grid, 
     expect_true(all(is.finite(cpp)))
     expect_lte(rel_err(cpp, r), 1e-13)
     ## the spline is read from the package data, not hard-coded
-    expect_identical(ka$z, environment(fastKarOptim::splineobj$distance_spline)$z)
-    expect_identical(ka$slope, fastKarOptim::splineobj$distance_spline(ka$lmin, deriv = 1))
+    expect_identical(ka$z, environment(fastKar::splineobj$distance_spline)$z)
+    expect_identical(ka$slope, fastKar::splineobj$distance_spline(ka$lmin, deriv = 1))
 })
 
 ## dense reference for one hand-built walk: simulate_map() on the local rows, symmetrize,

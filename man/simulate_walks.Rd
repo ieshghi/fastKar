@@ -26,7 +26,7 @@ simulate_walks(
 
 \item{if.comps}{boolean setting whether or not to simulate compartments (defaults to FALSE)}
 
-\item{mc.cores}{number of cores to use in parallel simulation (defaults to 1)}
+\item{mc.cores}{accepted for compatibility (defaults to 1). The walk kernel runs single-threaded in C++, where forking over walks costs more than it saves; results do not depend on it. Parallelize over candidates instead.}
 
 \item{if.sum}{boolean deciding whether to sum the simulated Hi-C signal from all walks or whether to return a list of Hi-C maps (defaults to TRUE)}
 
