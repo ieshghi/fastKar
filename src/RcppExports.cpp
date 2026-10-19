@@ -12,7 +12,7 @@ Rcpp::Rostream<false>& Rcpp::Rcerr = Rcpp::Rcpp_cerr_get();
 
 // compute_cost_matrix_cpp
 NumericMatrix compute_cost_matrix_cpp(List sn_x, List sn_y, NumericVector penalty);
-RcppExport SEXP _fastKar_compute_cost_matrix_cpp(SEXP sn_xSEXP, SEXP sn_ySEXP, SEXP penaltySEXP) {
+RcppExport SEXP _fastKarOptim_compute_cost_matrix_cpp(SEXP sn_xSEXP, SEXP sn_ySEXP, SEXP penaltySEXP) {
 BEGIN_RCPP
     Rcpp::RObject rcpp_result_gen;
     Rcpp::RNGScope rcpp_rngScope_gen;
@@ -23,9 +23,60 @@ BEGIN_RCPP
     return rcpp_result_gen;
 END_RCPP
 }
+// cmp_template_match
+bool cmp_template_match(SEXP i, SEXP j, SEXP id, int n);
+RcppExport SEXP _fastKarOptim_cmp_template_match(SEXP iSEXP, SEXP jSEXP, SEXP idSEXP, SEXP nSEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    Rcpp::traits::input_parameter< SEXP >::type i(iSEXP);
+    Rcpp::traits::input_parameter< SEXP >::type j(jSEXP);
+    Rcpp::traits::input_parameter< SEXP >::type id(idSEXP);
+    Rcpp::traits::input_parameter< int >::type n(nSEXP);
+    rcpp_result_gen = Rcpp::wrap(cmp_template_match(i, j, id, n));
+    return rcpp_result_gen;
+END_RCPP
+}
+// cmp_template_cols
+List cmp_template_cols(NumericVector widths, bool with_widthprod);
+RcppExport SEXP _fastKarOptim_cmp_template_cols(SEXP widthsSEXP, SEXP with_widthprodSEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    Rcpp::traits::input_parameter< NumericVector >::type widths(widthsSEXP);
+    Rcpp::traits::input_parameter< bool >::type with_widthprod(with_widthprodSEXP);
+    rcpp_result_gen = Rcpp::wrap(cmp_template_cols(widths, with_widthprod));
+    return rcpp_result_gen;
+END_RCPP
+}
+// cmp_pix_index
+IntegerVector cmp_pix_index(IntegerVector i, IntegerVector j, int n);
+RcppExport SEXP _fastKarOptim_cmp_pix_index(SEXP iSEXP, SEXP jSEXP, SEXP nSEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    Rcpp::traits::input_parameter< IntegerVector >::type i(iSEXP);
+    Rcpp::traits::input_parameter< IntegerVector >::type j(jSEXP);
+    Rcpp::traits::input_parameter< int >::type n(nSEXP);
+    rcpp_result_gen = Rcpp::wrap(cmp_pix_index(i, j, n));
+    return rcpp_result_gen;
+END_RCPP
+}
+// cmp_tile_cov
+NumericVector cmp_tile_cov(NumericVector v, int n);
+RcppExport SEXP _fastKarOptim_cmp_tile_cov(SEXP vSEXP, SEXP nSEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    Rcpp::traits::input_parameter< NumericVector >::type v(vSEXP);
+    Rcpp::traits::input_parameter< int >::type n(nSEXP);
+    rcpp_result_gen = Rcpp::wrap(cmp_tile_cov(v, n));
+    return rcpp_result_gen;
+END_RCPP
+}
 // count_kmers_cpp
 DataFrame count_kmers_cpp(List snode_ids, LogicalVector circular, int k);
-RcppExport SEXP _fastKar_count_kmers_cpp(SEXP snode_idsSEXP, SEXP circularSEXP, SEXP kSEXP) {
+RcppExport SEXP _fastKarOptim_count_kmers_cpp(SEXP snode_idsSEXP, SEXP circularSEXP, SEXP kSEXP) {
 BEGIN_RCPP
     Rcpp::RObject rcpp_result_gen;
     Rcpp::RNGScope rcpp_rngScope_gen;
@@ -36,9 +87,129 @@ BEGIN_RCPP
     return rcpp_result_gen;
 END_RCPP
 }
+// make_template_dat_cpp
+DataFrame make_template_dat_cpp(DataFrame A);
+RcppExport SEXP _fastKarOptim_make_template_dat_cpp(SEXP ASEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    Rcpp::traits::input_parameter< DataFrame >::type A(ASEXP);
+    rcpp_result_gen = Rcpp::wrap(make_template_dat_cpp(A));
+    return rcpp_result_gen;
+END_RCPP
+}
+// forward_density_cpp
+NumericVector forward_density_cpp(NumericVector dist, List z, double lmin, double slope);
+RcppExport SEXP _fastKarOptim_forward_density_cpp(SEXP distSEXP, SEXP zSEXP, SEXP lminSEXP, SEXP slopeSEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    Rcpp::traits::input_parameter< NumericVector >::type dist(distSEXP);
+    Rcpp::traits::input_parameter< List >::type z(zSEXP);
+    Rcpp::traits::input_parameter< double >::type lmin(lminSEXP);
+    Rcpp::traits::input_parameter< double >::type slope(slopeSEXP);
+    rcpp_result_gen = Rcpp::wrap(forward_density_cpp(dist, z, lmin, slope));
+    return rcpp_result_gen;
+END_RCPP
+}
+// forward_walks_cpp
+NumericVector forward_walks_cpp(IntegerVector walk_ptr, IntegerVector orig, NumericVector width, bool int_width, LogicalVector circular, NumericVector cn, int n_ref, List z, double lmin, double slope, double maxval, double maxval_density, double model, double lr_denom, Function diagf);
+RcppExport SEXP _fastKarOptim_forward_walks_cpp(SEXP walk_ptrSEXP, SEXP origSEXP, SEXP widthSEXP, SEXP int_widthSEXP, SEXP circularSEXP, SEXP cnSEXP, SEXP n_refSEXP, SEXP zSEXP, SEXP lminSEXP, SEXP slopeSEXP, SEXP maxvalSEXP, SEXP maxval_densitySEXP, SEXP modelSEXP, SEXP lr_denomSEXP, SEXP diagfSEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    Rcpp::traits::input_parameter< IntegerVector >::type walk_ptr(walk_ptrSEXP);
+    Rcpp::traits::input_parameter< IntegerVector >::type orig(origSEXP);
+    Rcpp::traits::input_parameter< NumericVector >::type width(widthSEXP);
+    Rcpp::traits::input_parameter< bool >::type int_width(int_widthSEXP);
+    Rcpp::traits::input_parameter< LogicalVector >::type circular(circularSEXP);
+    Rcpp::traits::input_parameter< NumericVector >::type cn(cnSEXP);
+    Rcpp::traits::input_parameter< int >::type n_ref(n_refSEXP);
+    Rcpp::traits::input_parameter< List >::type z(zSEXP);
+    Rcpp::traits::input_parameter< double >::type lmin(lminSEXP);
+    Rcpp::traits::input_parameter< double >::type slope(slopeSEXP);
+    Rcpp::traits::input_parameter< double >::type maxval(maxvalSEXP);
+    Rcpp::traits::input_parameter< double >::type maxval_density(maxval_densitySEXP);
+    Rcpp::traits::input_parameter< double >::type model(modelSEXP);
+    Rcpp::traits::input_parameter< double >::type lr_denom(lr_denomSEXP);
+    Rcpp::traits::input_parameter< Function >::type diagf(diagfSEXP);
+    rcpp_result_gen = Rcpp::wrap(forward_walks_cpp(walk_ptr, orig, width, int_width, circular, cn, n_ref, z, lmin, slope, maxval, maxval_density, model, lr_denom, diagf));
+    return rcpp_result_gen;
+END_RCPP
+}
+// forward_assemble_cpp
+List forward_assemble_cpp(NumericVector width, NumericVector cn, NumericVector acc, double depth, double rho, bool interchr);
+RcppExport SEXP _fastKarOptim_forward_assemble_cpp(SEXP widthSEXP, SEXP cnSEXP, SEXP accSEXP, SEXP depthSEXP, SEXP rhoSEXP, SEXP interchrSEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    Rcpp::traits::input_parameter< NumericVector >::type width(widthSEXP);
+    Rcpp::traits::input_parameter< NumericVector >::type cn(cnSEXP);
+    Rcpp::traits::input_parameter< NumericVector >::type acc(accSEXP);
+    Rcpp::traits::input_parameter< double >::type depth(depthSEXP);
+    Rcpp::traits::input_parameter< double >::type rho(rhoSEXP);
+    Rcpp::traits::input_parameter< bool >::type interchr(interchrSEXP);
+    rcpp_result_gen = Rcpp::wrap(forward_assemble_cpp(width, cn, acc, depth, rho, interchr));
+    return rcpp_result_gen;
+END_RCPP
+}
+// forward_diploid_cpp
+NumericVector forward_diploid_cpp(IntegerVector chrom, NumericVector mid, NumericVector width, List z, double lmin, double slope, double maxval, double maxval_density, bool interchr, double rho, double depth, Function diagf);
+RcppExport SEXP _fastKarOptim_forward_diploid_cpp(SEXP chromSEXP, SEXP midSEXP, SEXP widthSEXP, SEXP zSEXP, SEXP lminSEXP, SEXP slopeSEXP, SEXP maxvalSEXP, SEXP maxval_densitySEXP, SEXP interchrSEXP, SEXP rhoSEXP, SEXP depthSEXP, SEXP diagfSEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    Rcpp::traits::input_parameter< IntegerVector >::type chrom(chromSEXP);
+    Rcpp::traits::input_parameter< NumericVector >::type mid(midSEXP);
+    Rcpp::traits::input_parameter< NumericVector >::type width(widthSEXP);
+    Rcpp::traits::input_parameter< List >::type z(zSEXP);
+    Rcpp::traits::input_parameter< double >::type lmin(lminSEXP);
+    Rcpp::traits::input_parameter< double >::type slope(slopeSEXP);
+    Rcpp::traits::input_parameter< double >::type maxval(maxvalSEXP);
+    Rcpp::traits::input_parameter< double >::type maxval_density(maxval_densitySEXP);
+    Rcpp::traits::input_parameter< bool >::type interchr(interchrSEXP);
+    Rcpp::traits::input_parameter< double >::type rho(rhoSEXP);
+    Rcpp::traits::input_parameter< double >::type depth(depthSEXP);
+    Rcpp::traits::input_parameter< Function >::type diagf(diagfSEXP);
+    rcpp_result_gen = Rcpp::wrap(forward_diploid_cpp(chrom, mid, width, z, lmin, slope, maxval, maxval_density, interchr, rho, depth, diagf));
+    return rcpp_result_gen;
+END_RCPP
+}
+// reads_fromwalk_cpp
+List reads_fromwalk_cpp(IntegerVector widths, IntegerVector lens, LogicalVector circular, double readL, CharacterVector fwd_tok, CharacterVector rev_tok, LogicalVector keep);
+RcppExport SEXP _fastKarOptim_reads_fromwalk_cpp(SEXP widthsSEXP, SEXP lensSEXP, SEXP circularSEXP, SEXP readLSEXP, SEXP fwd_tokSEXP, SEXP rev_tokSEXP, SEXP keepSEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    Rcpp::traits::input_parameter< IntegerVector >::type widths(widthsSEXP);
+    Rcpp::traits::input_parameter< IntegerVector >::type lens(lensSEXP);
+    Rcpp::traits::input_parameter< LogicalVector >::type circular(circularSEXP);
+    Rcpp::traits::input_parameter< double >::type readL(readLSEXP);
+    Rcpp::traits::input_parameter< CharacterVector >::type fwd_tok(fwd_tokSEXP);
+    Rcpp::traits::input_parameter< CharacterVector >::type rev_tok(rev_tokSEXP);
+    Rcpp::traits::input_parameter< LogicalVector >::type keep(keepSEXP);
+    rcpp_result_gen = Rcpp::wrap(reads_fromwalk_cpp(widths, lens, circular, readL, fwd_tok, rev_tok, keep));
+    return rcpp_result_gen;
+END_RCPP
+}
+// traverse_graph_fast_cpp
+List traverse_graph_fast_cpp(IntegerVector n, IntegerVector left, IntegerVector right, IntegerVector id, NumericVector loose_ends);
+RcppExport SEXP _fastKarOptim_traverse_graph_fast_cpp(SEXP nSEXP, SEXP leftSEXP, SEXP rightSEXP, SEXP idSEXP, SEXP loose_endsSEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    Rcpp::traits::input_parameter< IntegerVector >::type n(nSEXP);
+    Rcpp::traits::input_parameter< IntegerVector >::type left(leftSEXP);
+    Rcpp::traits::input_parameter< IntegerVector >::type right(rightSEXP);
+    Rcpp::traits::input_parameter< IntegerVector >::type id(idSEXP);
+    Rcpp::traits::input_parameter< NumericVector >::type loose_ends(loose_endsSEXP);
+    rcpp_result_gen = Rcpp::wrap(traverse_graph_fast_cpp(n, left, right, id, loose_ends));
+    return rcpp_result_gen;
+END_RCPP
+}
 // sort_snodes_cpp
 List sort_snodes_cpp(List snode_id, LogicalVector circular);
-RcppExport SEXP _fastKar_sort_snodes_cpp(SEXP snode_idSEXP, SEXP circularSEXP) {
+RcppExport SEXP _fastKarOptim_sort_snodes_cpp(SEXP snode_idSEXP, SEXP circularSEXP) {
 BEGIN_RCPP
     Rcpp::RObject rcpp_result_gen;
     Rcpp::RNGScope rcpp_rngScope_gen;
@@ -50,7 +221,7 @@ END_RCPP
 }
 // hash_karyotype_cpp
 std::string hash_karyotype_cpp(List snode_id, LogicalVector circular);
-RcppExport SEXP _fastKar_hash_karyotype_cpp(SEXP snode_idSEXP, SEXP circularSEXP) {
+RcppExport SEXP _fastKarOptim_hash_karyotype_cpp(SEXP snode_idSEXP, SEXP circularSEXP) {
 BEGIN_RCPP
     Rcpp::RObject rcpp_result_gen;
     Rcpp::RNGScope rcpp_rngScope_gen;
@@ -62,7 +233,7 @@ END_RCPP
 }
 // traverse_graph_cpp
 List traverse_graph_cpp(DataFrame A, NumericVector loose_ends);
-RcppExport SEXP _fastKar_traverse_graph_cpp(SEXP ASEXP, SEXP loose_endsSEXP) {
+RcppExport SEXP _fastKarOptim_traverse_graph_cpp(SEXP ASEXP, SEXP loose_endsSEXP) {
 BEGIN_RCPP
     Rcpp::RObject rcpp_result_gen;
     Rcpp::RNGScope rcpp_rngScope_gen;
@@ -74,7 +245,7 @@ END_RCPP
 }
 // traverse_graph_v2_cpp
 List traverse_graph_v2_cpp(DataFrame A, NumericVector loose_ends);
-RcppExport SEXP _fastKar_traverse_graph_v2_cpp(SEXP ASEXP, SEXP loose_endsSEXP) {
+RcppExport SEXP _fastKarOptim_traverse_graph_v2_cpp(SEXP ASEXP, SEXP loose_endsSEXP) {
 BEGIN_RCPP
     Rcpp::RObject rcpp_result_gen;
     Rcpp::RNGScope rcpp_rngScope_gen;
@@ -86,7 +257,7 @@ END_RCPP
 }
 // traverse_graph_v2_batch_cpp
 List traverse_graph_v2_batch_cpp(DataFrame A, List perms, NumericVector loose_ends);
-RcppExport SEXP _fastKar_traverse_graph_v2_batch_cpp(SEXP ASEXP, SEXP permsSEXP, SEXP loose_endsSEXP) {
+RcppExport SEXP _fastKarOptim_traverse_graph_v2_batch_cpp(SEXP ASEXP, SEXP permsSEXP, SEXP loose_endsSEXP) {
 BEGIN_RCPP
     Rcpp::RObject rcpp_result_gen;
     Rcpp::RNGScope rcpp_rngScope_gen;
@@ -99,17 +270,28 @@ END_RCPP
 }
 
 static const R_CallMethodDef CallEntries[] = {
-    {"_fastKar_compute_cost_matrix_cpp", (DL_FUNC) &_fastKar_compute_cost_matrix_cpp, 3},
-    {"_fastKar_count_kmers_cpp", (DL_FUNC) &_fastKar_count_kmers_cpp, 3},
-    {"_fastKar_sort_snodes_cpp", (DL_FUNC) &_fastKar_sort_snodes_cpp, 2},
-    {"_fastKar_hash_karyotype_cpp", (DL_FUNC) &_fastKar_hash_karyotype_cpp, 2},
-    {"_fastKar_traverse_graph_cpp", (DL_FUNC) &_fastKar_traverse_graph_cpp, 2},
-    {"_fastKar_traverse_graph_v2_cpp", (DL_FUNC) &_fastKar_traverse_graph_v2_cpp, 2},
-    {"_fastKar_traverse_graph_v2_batch_cpp", (DL_FUNC) &_fastKar_traverse_graph_v2_batch_cpp, 3},
+    {"_fastKarOptim_compute_cost_matrix_cpp", (DL_FUNC) &_fastKarOptim_compute_cost_matrix_cpp, 3},
+    {"_fastKarOptim_cmp_template_match", (DL_FUNC) &_fastKarOptim_cmp_template_match, 4},
+    {"_fastKarOptim_cmp_template_cols", (DL_FUNC) &_fastKarOptim_cmp_template_cols, 2},
+    {"_fastKarOptim_cmp_pix_index", (DL_FUNC) &_fastKarOptim_cmp_pix_index, 3},
+    {"_fastKarOptim_cmp_tile_cov", (DL_FUNC) &_fastKarOptim_cmp_tile_cov, 2},
+    {"_fastKarOptim_count_kmers_cpp", (DL_FUNC) &_fastKarOptim_count_kmers_cpp, 3},
+    {"_fastKarOptim_make_template_dat_cpp", (DL_FUNC) &_fastKarOptim_make_template_dat_cpp, 1},
+    {"_fastKarOptim_forward_density_cpp", (DL_FUNC) &_fastKarOptim_forward_density_cpp, 4},
+    {"_fastKarOptim_forward_walks_cpp", (DL_FUNC) &_fastKarOptim_forward_walks_cpp, 15},
+    {"_fastKarOptim_forward_assemble_cpp", (DL_FUNC) &_fastKarOptim_forward_assemble_cpp, 6},
+    {"_fastKarOptim_forward_diploid_cpp", (DL_FUNC) &_fastKarOptim_forward_diploid_cpp, 12},
+    {"_fastKarOptim_reads_fromwalk_cpp", (DL_FUNC) &_fastKarOptim_reads_fromwalk_cpp, 7},
+    {"_fastKarOptim_traverse_graph_fast_cpp", (DL_FUNC) &_fastKarOptim_traverse_graph_fast_cpp, 5},
+    {"_fastKarOptim_sort_snodes_cpp", (DL_FUNC) &_fastKarOptim_sort_snodes_cpp, 2},
+    {"_fastKarOptim_hash_karyotype_cpp", (DL_FUNC) &_fastKarOptim_hash_karyotype_cpp, 2},
+    {"_fastKarOptim_traverse_graph_cpp", (DL_FUNC) &_fastKarOptim_traverse_graph_cpp, 2},
+    {"_fastKarOptim_traverse_graph_v2_cpp", (DL_FUNC) &_fastKarOptim_traverse_graph_v2_cpp, 2},
+    {"_fastKarOptim_traverse_graph_v2_batch_cpp", (DL_FUNC) &_fastKarOptim_traverse_graph_v2_batch_cpp, 3},
     {NULL, NULL, 0}
 };
 
-RcppExport void R_init_fastKar(DllInfo *dll) {
+RcppExport void R_init_fastKarOptim(DllInfo *dll) {
     R_registerRoutines(dll, NULL, CallEntries, NULL, NULL);
     R_useDynamicSymbols(dll, FALSE);
 }

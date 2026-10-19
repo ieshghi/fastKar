@@ -2,30 +2,91 @@
 # Generator token: 10BE3573-1514-4C36-9D1C-5A225CD40393
 
 compute_cost_matrix_cpp <- function(sn_x, sn_y, penalty) {
-    .Call(`_fastKar_compute_cost_matrix_cpp`, sn_x, sn_y, penalty)
+    .Call(`_fastKarOptim_compute_cost_matrix_cpp`, sn_x, sn_y, penalty)
+}
+
+cmp_template_match <- function(i, j, id, n) {
+    .Call(`_fastKarOptim_cmp_template_match`, i, j, id, n)
+}
+
+cmp_template_cols <- function(widths, with_widthprod) {
+    .Call(`_fastKarOptim_cmp_template_cols`, widths, with_widthprod)
+}
+
+cmp_pix_index <- function(i, j, n) {
+    .Call(`_fastKarOptim_cmp_pix_index`, i, j, n)
+}
+
+cmp_tile_cov <- function(v, n) {
+    .Call(`_fastKarOptim_cmp_tile_cov`, v, n)
 }
 
 count_kmers_cpp <- function(snode_ids, circular, k) {
-    .Call(`_fastKar_count_kmers_cpp`, snode_ids, circular, k)
+    .Call(`_fastKarOptim_count_kmers_cpp`, snode_ids, circular, k)
+}
+
+#' Template of all pixels (i <= j) of a tiling (moved from a load-time cppFunction)
+#'
+#' @param A data.frame with a "width" column
+#' @return data.frame with columns i, j, value (0), widthprod, id
+make_template_dat_cpp <- function(A) {
+    .Call(`_fastKarOptim_make_template_dat_cpp`, A)
+}
+
+#' distance_density() in C++ (kernel test hook)
+forward_density_cpp <- function(dist, z, lmin, slope) {
+    .Call(`_fastKarOptim_forward_density_cpp`, dist, z, lmin, slope)
+}
+
+#' Simulate a set of walks into one reference-pixel accumulator
+#'
+#' Walk w occupies local rows walk_ptr[w] .. walk_ptr[w+1]-1 (0-based). For each walk the local
+#' coordinates are the cumulative sum of the row widths (as the reference cumsum(), including its
+#' integer-overflow / NA behaviour), and every pair of local rows a <= b that both map to a target
+#' tile (orig non-NA) is simulated and lifted: a == b adds L_aa to (p, p); a < b adds L_ab to
+#' (min(p,q), max(p,q)) if p != q and 2 L_ab to (p, p) if p == q. Each walk's map is multiplied by cn[w].
+#'
+#' @return numeric vector over the n_ref*(n_ref+1)/2 template pixels, in pixel-id order
+forward_walks_cpp <- function(walk_ptr, orig, width, int_width, circular, cn, n_ref, z, lmin, slope, maxval, maxval_density, model, lr_denom, diagf) {
+    .Call(`_fastKarOptim_forward_walks_cpp`, walk_ptr, orig, width, int_width, circular, cn, n_ref, z, lmin, slope, maxval, maxval_density, model, lr_denom, diagf)
+}
+
+#' Assemble the summed map: i, j, id and value = depth * (acc [+ widthprod * rho * cn_i * cn_j])
+forward_assemble_cpp <- function(width, cn, acc, depth, rho, interchr) {
+    .Call(`_fastKarOptim_forward_assemble_cpp`, width, cn, acc, depth, rho, interchr)
+}
+
+#' simulate_diploid_map() values (Hi-C model) in pixel-id order, before is.na and depth:
+#' 2 * the single-copy map on same-chromosome pixels, plus the interchromosomal term if asked.
+forward_diploid_cpp <- function(chrom, mid, width, z, lmin, slope, maxval, maxval_density, interchr, rho, depth, diagf) {
+    .Call(`_fastKarOptim_forward_diploid_cpp`, chrom, mid, width, z, lmin, slope, maxval, maxval_density, interchr, rho, depth, diagf)
+}
+
+reads_fromwalk_cpp <- function(widths, lens, circular, readL, fwd_tok, rev_tok, keep) {
+    .Call(`_fastKarOptim_reads_fromwalk_cpp`, widths, lens, circular, readL, fwd_tok, rev_tok, keep)
+}
+
+traverse_graph_fast_cpp <- function(n, left, right, id, loose_ends) {
+    .Call(`_fastKarOptim_traverse_graph_fast_cpp`, n, left, right, id, loose_ends)
 }
 
 sort_snodes_cpp <- function(snode_id, circular) {
-    .Call(`_fastKar_sort_snodes_cpp`, snode_id, circular)
+    .Call(`_fastKarOptim_sort_snodes_cpp`, snode_id, circular)
 }
 
 hash_karyotype_cpp <- function(snode_id, circular) {
-    .Call(`_fastKar_hash_karyotype_cpp`, snode_id, circular)
+    .Call(`_fastKarOptim_hash_karyotype_cpp`, snode_id, circular)
 }
 
 traverse_graph_cpp <- function(A, loose_ends) {
-    .Call(`_fastKar_traverse_graph_cpp`, A, loose_ends)
+    .Call(`_fastKarOptim_traverse_graph_cpp`, A, loose_ends)
 }
 
 traverse_graph_v2_cpp <- function(A, loose_ends) {
-    .Call(`_fastKar_traverse_graph_v2_cpp`, A, loose_ends)
+    .Call(`_fastKarOptim_traverse_graph_v2_cpp`, A, loose_ends)
 }
 
 traverse_graph_v2_batch_cpp <- function(A, perms, loose_ends) {
-    .Call(`_fastKar_traverse_graph_v2_batch_cpp`, A, perms, loose_ends)
+    .Call(`_fastKarOptim_traverse_graph_v2_batch_cpp`, A, perms, loose_ends)
 }
 
