@@ -6,7 +6,7 @@
 #' @param target_region a gRange corresponding to the region of interest for the simulation. If left blank, assume the footprint of the walks.
 #' @param pix.size resolution of the simulation tiles, default is 100kb. If set to 0, each tile corresponds to half a node in the gGraph.
 #' @param if.comps boolean setting whether or not to simulate compartments (defaults to FALSE)
-#' @param mc.cores number of cores to use in parallel simulation (defaults to 1)
+#' @param mc.cores accepted for compatibility (defaults to 1). The walk kernel runs single-threaded in C++, where forking over walks costs more than it saves (bench/bench_forward_forks.R); results do not depend on it. Parallelize over candidates instead.
 #' @param if.sum boolean deciding whether to sum the simulated Hi-C signal from all walks or whether to return a list of Hi-C maps (defaults to TRUE)
 #' @param depth depth of the simulated Hi-C data, in X coverage (defaults to 1)
 #' @param purity tumor purity/fraction of the sample explained by the supplied walks (defaults to 1). If less than 1, the remaining fraction is simulated as a diploid reference genome over the same context and added to the tumor simulation.
@@ -128,7 +128,7 @@ prep_for_sim = function(walks,target_region=NULL,pix.size=1e5,if.comps=F){
 #' @param tiled.target a data.table produced by prep_for_sim(), containing target tile coordinates, tile.ids, and corresponding node.ids, as well as CN and width
 #' @param widthdt a data.table produced by prep_for_sim(), containing width data for all the nodes in the gGraph simulated here.
 #' @param if.comps boolean setting whether or not to simulate compartments (defaults to FALSE)
-#' @param mc.cores number of cores to use in parallel simulation (defaults to 1)
+#' @param mc.cores accepted for compatibility (defaults to 1). The walk kernel runs single-threaded in C++, where forking over walks costs more than it saves (bench/bench_forward_forks.R); results do not depend on it. Parallelize over candidates instead.
 #' @param if.sum boolean deciding whether to sum the simulated Hi-C signal from all walks or whether to return a list of Hi-C maps (defaults to TRUE)
 #' @param depth depth of the simulated Hi-C data, in X coverage (defaults to 1)
 #' @param model sets whether to simulate Hi-C (model = 0) or long-read data (model = length of reads in bp)
