@@ -76,18 +76,26 @@ bestfit_search = function(graph,hic,nsample,depth,pix.size=NULL,target_region=NU
 		pix.size = median(width(hic$gr))
 	}
 	gw = sample.gwalks(graph,nsample,verbose=F,mc.cores=mc.cores,keep.circular=keep.circular)
+	# simulate on the observed bins that overlap target_region: every simulated tile then lies inside one
+	# observed bin, so compmaps() sums tiles exactly instead of splitting them across bins
+	sim_region = target_region
+	if (!is.null(target_region)){
+		obs_bins = hic$gr[,c()]
+		obs_bins = obs_bins[obs_bins %^% target_region]
+		if (length(obs_bins)){sim_region = obs_bins}
+	}
 	# the tiling depends only on the graph, target and resolution: prepare it once for all candidates
 	prepped = NULL
-	if (length(gw) && !is.null(target_region)){
+	if (length(gw) && !is.null(sim_region)){
 		g1 = gw[[1]]$graph
 		if (all(vapply(gw, function(w){identical(w$graph, g1)}, logical(1)))){
-			prepped = prep_for_sim(gw[[1]],target_region,pix.size)
+			prepped = prep_for_sim(gw[[1]],sim_region,pix.size)
 		}
 	}
 	if (verbose==F){
-		sims = mclapply(gw,function(w){forward_simulate(w,target_region=target_region,pix.size=pix.size,depth=depth,purity=purity,prepped=prepped)},mc.cores=mc.cores)
+		sims = mclapply(gw,function(w){forward_simulate(w,target_region=sim_region,pix.size=pix.size,depth=depth,purity=purity,prepped=prepped)},mc.cores=mc.cores)
 	}else{
-		sims = pbmclapply(gw,function(w){forward_simulate(w,target_region=target_region,pix.size=pix.size,depth=depth,purity=purity,prepped=prepped)},mc.cores=mc.cores)
+		sims = pbmclapply(gw,function(w){forward_simulate(w,target_region=sim_region,pix.size=pix.size,depth=depth,purity=purity,prepped=prepped)},mc.cores=mc.cores)
 	}
 	# The genome-wide depth estimate can be off locally, so rescale all candidates by one shared factor
 	# to the observed total. Use the median candidate total so that no single sample sets it.

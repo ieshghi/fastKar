@@ -82,10 +82,12 @@ sample.gwalks = function(gg,N=1,mc.cores=1,chunksize = 1e3,return.gw=T,remove.du
   }
   chunks <- N %/% chunksize
   if (chunks > 1){
+	  # full chunks plus a last partial one, so exactly N permutations are drawn (multiples of chunksize are unchanged)
+	  sizes = c(rep(chunksize, chunks), if (N %% chunksize) N %% chunksize)
 	  if(verbose){
-  	perms <- do.call('c',pbmclapply(seq_len(chunks), function(i) shuffle_chunk(chunksize, internal.edges),mc.cores = mc.cores))
+  	perms <- do.call('c',pbmclapply(sizes, function(K) shuffle_chunk(K, internal.edges),mc.cores = mc.cores))
   }else{
-  	perms <- do.call('c',mclapply(seq_len(chunks), function(i) shuffle_chunk(chunksize, internal.edges),mc.cores = mc.cores))
+  	perms <- do.call('c',mclapply(sizes, function(K) shuffle_chunk(K, internal.edges),mc.cores = mc.cores))
 	  }
   }else{
 	if(verbose){

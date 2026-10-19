@@ -1,4 +1,4 @@
-fastKar_ecfinder = function(gg,ft,hic.res,true_hic_path,ec_fraction_threshold = 0.6,n_sample=100,n_ec = 10,figure_path = NULL,mc.cores=1,return_all=F,purity=1,depth_multiplier=1,rescale=F){
+fastKar_ecfinder = function(gg,ft,hic.res,true_hic_path,ec_fraction_threshold = 0.6,n_sample=100,n_ec = 10,figure_path = NULL,mc.cores=1,return_all=F,purity=1,rescale=F){
 	library(ggforce)
 	wholegenome = si2gr(hg_seqlengths(chr=FALSE)) %Q% (seqnames %in% c(1:22,'X','Y'))
 	if (is(ft,'character')){ft = streduce(parse.gr(ft))}
@@ -11,7 +11,7 @@ fastKar_ecfinder = function(gg,ft,hic.res,true_hic_path,ec_fraction_threshold = 
 		ecdna_solns,function(x){amp_circular_fraction(x,ft)})))
 	ecdna_solns = ecdna_solns[ecdna_circ > ec_fraction_threshold]
 	if (!length(ecdna_solns)){return(list(call='CI', reason='No good ecDNA solutions'))}
-	hsr_solns = squeeze(gg=gg,ft=ft,N=1000,k_return=1,verbose = F,mc.cores=mc.cores)
+	hsr_solns = squeeze(gg=gg,ft=ft,N=1000,k_return=n_ec,verbose = F,mc.cores=mc.cores)
 	n_ec = length(ecdna_solns)
 	n_hsr = length(hsr_solns)
 	random_walks = sample.gwalks(gg,n_sample,mc.cores=mc.cores,verbose = F)
@@ -20,7 +20,7 @@ fastKar_ecfinder = function(gg,ft,hic.res,true_hic_path,ec_fraction_threshold = 
 	# estimate depth of hi-c data and pick resolution to simulate at
 	ploidy = sum(gg$gr$cn*width(gg$gr))/sum(width(gg$gr))
 	is.chr = hic_is_chr(true_hic_path) #e.g. the NYU cell line mcools name chromosomes 'chr1', ...; graphs don't
-	depth = depth_multiplier*estimate.depthratio(true_hic_path,ploidy=ploidy,purity=purity,if.chr=is.chr)
+	depth = estimate.depthratio(true_hic_path,ploidy=ploidy,purity=purity,if.chr=is.chr)
 	hictype = tools::file_ext(true_hic_path)
 	if (hic.res<0){ #if hic.res < 0 this is asking for a number of bins to cover the footprint
 		hic.res = sum(width(ft_context))/abs(hic.res)
@@ -39,10 +39,14 @@ fastKar_ecfinder = function(gg,ft,hic.res,true_hic_path,ec_fraction_threshold = 
 	hic.gr = true_hic$gr
 	true_hic = rebin_matrix(true_hic,hic.gr) #make sure the matrix matches future matrices (basically just adds in 0s)
 	message('Simulating Hi-C for hypotheses and random samples')
-	# simulate Hi-C for each of the generated solutions, rebin to the data GRanges
+	# simulate on the data bins themselves, so every simulated tile lies inside one bin and the rebin is an exact sum.
+	# all solutions are walks on gg, so the bins are tiled once and reused (walks on another graph are tiled anew)
+	prepped = prep_for_sim(list(graph=gg),hic.gr,hic.res)
+	node_cn = gg$nodes$dt$cn
 	simfun=function(x){
-		rebin_matrix(forward_simulate(x,target_region = ft_context,
-					      pix.size=hic.res,depth=depth,purity=purity),hic.gr)
+		p = if (identical(x$graph$nodes$dt$cn,node_cn)) prepped else NULL
+		rebin_matrix(forward_simulate(x,target_region = hic.gr,
+					      pix.size=hic.res,depth=depth,purity=purity,prepped=p),hic.gr)
 	}
 	hsr_sims = mclapply(hsr_solns,simfun,mc.cores=mc.cores)
 	ecdna_sims = mclapply(ecdna_solns,simfun,mc.cores=mc.cores)
@@ -68,23 +72,36 @@ fastKar_ecfinder = function(gg,ft,hic.res,true_hic_path,ec_fraction_threshold = 
 	#
 	message('Scoring karyotypes')
 	area0 = median(width(ecdna_sims[[1]]$gr))^2
-	# ecDNA score is mean likelihood of ecDNA - likelihood of HSR
-	nll = function(sims,data){
-		mean(unlist(lapply(sims,function(sim){compdats(data,sim$dat,area0=area0)})))}
-	combined_llr = function(x){nll(hsr_sims,x)-nll(ecdna_sims,x)} 
+	# ecDNA score is best-fit (min) NLL over HSR solutions - best-fit NLL over ecDNA solutions
+	# pixel tables pulled out once: gm$dat copies the table on every access
+	hsr_dats = lapply(hsr_sims,function(sim){sim$dat})
+	ecdna_dats = lapply(ecdna_sims,function(sim){sim$dat})
+	true_dat = true_hic$dat
+	nll = function(dats,data,leave_out=NULL){
+		nlls = unlist(lapply(dats,function(d){compdats(data,d,area0=area0)}))
+		if (length(leave_out)){nlls = nlls[-leave_out]}
+		min(nlls)}
+	combined_llr = function(x,leave_hsr=NULL,leave_ec=NULL){nll(hsr_dats,x,leave_hsr)-nll(ecdna_dats,x,leave_ec)}
+	# noisy samples are scored without the solution that generated them, since the real data's karyotype is not
+	# among the solutions either; only done with > 3 solutions on each side, so the class min stays meaningful
+	leave_out = n_ec > 3 & n_hsr > 3
+	ec_src = rep(seq_len(n_ec),each=n_ec_sample)
+	hsr_src = rep(seq_len(n_hsr),each=n_hsr_sample)
 	# score all samples and true Hi-C
 	random_scores = mclapply(random_noisy_sims,combined_llr,mc.cores=mc.cores) %>% unlist
-	ec_scores = mclapply(ec_noisy_sims,combined_llr,mc.cores=mc.cores) %>% unlist
-	hsr_scores = mclapply(hsr_noisy_sims,combined_llr,mc.cores=mc.cores) %>% unlist
-	true_llr = combined_llr(true_hic$dat)
+	ec_scores = mclapply(seq_along(ec_noisy_sims),function(k){
+		combined_llr(ec_noisy_sims[[k]],leave_ec=if (leave_out) ec_src[k])},mc.cores=mc.cores) %>% unlist
+	hsr_scores = mclapply(seq_along(hsr_noisy_sims),function(k){
+		combined_llr(hsr_noisy_sims[[k]],leave_hsr=if (leave_out) hsr_src[k])},mc.cores=mc.cores) %>% unlist
+	true_llr = combined_llr(true_dat)
 	#
 	dt = rbind(data.table(score=random_scores,type='Random',circle = random_circ),
 		   data.table(score=ec_scores,type='ecDNA'),
 		   data.table(score=hsr_scores,type='HSR'),
 		   fill=T)
-	ecdna_nll = unlist(lapply(ecdna_sims,function(sim){compdats(true_hic$dat,sim$dat,area0=area0)}))
+	ecdna_nll = unlist(lapply(ecdna_dats,function(d){compdats(true_dat,d,area0=area0)}))
 	best_ecdna_ix = which.min(ecdna_nll)
-	hsr_nll = unlist(lapply(hsr_sims,function(sim){compdats(true_hic$dat,sim$dat,area0=area0)}))
+	hsr_nll = unlist(lapply(hsr_dats,function(d){compdats(true_dat,d,area0=area0)}))
 	best_hsr_ix = which.min(hsr_nll)
 	likrat_gm = compmaps(true_hic,hsr_sims[[best_hsr_ix]]) - compmaps(true_hic,ecdna_sims[[best_ecdna_ix]])
 	likrat_max = max(abs(likrat_gm$value))
@@ -125,11 +142,11 @@ fastKar_ecfinder = function(gg,ft,hic.res,true_hic_path,ec_fraction_threshold = 
 	circ_cor = cor(dt_r$score,dt_r$circle)
 	ec_hsr_sep = ks.test(dt[type=='HSR']$score,dt[type=='ecDNA']$score)$p.value
 	if (ec_hsr_sep < 1e-2 & true_llr > ec_min){
-		return(list(call='ecDNA',sep_pval = ec_hsr_sep,circ_cor = circ_cor,ec_score_true = true_llr,score_dt=dt,sum_ratio=sum_ratio,depth_ratio=ratio))
+		return(list(call='ecDNA',sep_pval = ec_hsr_sep,circ_cor = circ_cor,ec_score_true = true_llr,score_dt=dt,sum_ratio=sum_ratio,depth_ratio=ratio,n_ec=n_ec,n_hsr=n_hsr,leave_out=leave_out))
 	}else if (ec_hsr_sep < 1e-2 & true_llr < hsr_max){
-		return(list(call='CI',sep_pval = ec_hsr_sep,circ_cor = circ_cor,ec_score_true = true_llr,score_dt=dt,sum_ratio=sum_ratio,depth_ratio=ratio))
+		return(list(call='CI',sep_pval = ec_hsr_sep,circ_cor = circ_cor,ec_score_true = true_llr,score_dt=dt,sum_ratio=sum_ratio,depth_ratio=ratio,n_ec=n_ec,n_hsr=n_hsr,leave_out=leave_out))
 	}else{
-		return(list(call='None',sep_pval = ec_hsr_sep,circ_cor = circ_cor,ec_score_true = true_llr,score_dt=dt,sum_ratio=sum_ratio,depth_ratio=ratio))
+		return(list(call='None',sep_pval = ec_hsr_sep,circ_cor = circ_cor,ec_score_true = true_llr,score_dt=dt,sum_ratio=sum_ratio,depth_ratio=ratio,n_ec=n_ec,n_hsr=n_hsr,leave_out=leave_out))
 	}
 }
 
@@ -218,7 +235,9 @@ boil_greedy = function(gg,ft,N,n_solns_try=1,mc.cores=1){
 	if(!length(circles)){return(sample.gwalks(gg,n_solns_try,verbose=F))}
 	greedypeel = function(gg,circles,deterministic){	
 		mycirc = circles$copy
-		gg.cur = gg$copy
+		# not gg$copy: for graphs read from rds the copy shares gg's edge table, so subtract_walk's
+		# edge $mark would strip copy number from gg itself (and from everything sampled from it later)
+		gg.cur = gG(nodes = gg$nodes$gr, edges = copy(gg$edges$dt))
 		scores = score_circles(mycirc,gg.cur,ft)[max.walk.cn>0 & score>0]
 		while (nrow(scores)){
 			if (deterministic | (nrow(scores)==1)){
@@ -255,15 +274,26 @@ amp.entropy = function(gw,amp.nodes){
 	-sum(walk.dist$ampfrac*log(walk.dist$ampfrac))
 }
 
+#amp.entropy() of a raw karyotype as sample.gwalks(return.gw=F) gives it (list(snode.id, circular)), without building a gWalk
+amp.entropy.raw = function(kar,amp.nodes){
+	nodes = abs(unlist(kar$snode.id))
+	walk = rep(seq_along(kar$snode.id),lengths(kar$snode.id))
+	walk.amp = tabulate(walk[nodes %in% amp.nodes],length(kar$snode.id))
+	ampfrac = walk.amp[walk.amp>0]/sum(walk.amp)
+	-sum(ampfrac*log(ampfrac))
+}
+
 squeeze = function(gg,ft,N,k_return=1,verbose=F,mc.cores=1){
 	amplicon_nodes = (gg$nodes$gr %&% ft)$node.id %>% unique 
 	amplicon_context_nodes = (gg$nodes$gr %&% streduce(ft + 1e3))$node.id %>% unique 
 	freeze.nodes = gg$nodes$dt[!(node.id %in% amplicon_context_nodes)]$node.id #we don't want to freeze nodes directly adjacent to the amplicon, hence ft + 1e3
 	if (verbose){message('Sampling walks from graph')}
-	gwl = sample.gwalks(gg,N,frozen.nodes = freeze.nodes,verbose=F,mc.cores=mc.cores)
+	# raw karyotypes: gWalks for all N cost ~10x the memory and ~6x the time (NCIH-2170, N = 1000), and only k_return are kept
+	kars = sample.gwalks(gg,N,frozen.nodes = freeze.nodes,verbose=F,mc.cores=mc.cores,return.gw=F)
 	if (verbose){message('Scoring walks')}
-	entropies = unlist(lapply(gwl,function(gw){amp.entropy(gw,amplicon_nodes)}))
-	top_walks = gwl[order(entropies)[1:k_return]]
+	entropies = unlist(lapply(kars,function(k){amp.entropy.raw(k,amplicon_nodes)}))
+	top_walks = lapply(kars[head(order(entropies),k_return)],function(k){gW(graph=gg,snode.id=k$snode.id,circular=k$circular)})
+	rm(kars)
 	if(verbose){message(paste0('Genrating top-',k_return,' solutions'))}
 	mclapply(top_walks,function(gw){
 			 if (sum((gw %&% ft)$circular)>0){

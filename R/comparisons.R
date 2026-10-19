@@ -732,17 +732,33 @@ rebin_matrix = function(gm,target_gr,writezeros=T){
 			return(gM(gr=target_gr,dat=outdt))
 		}
 	}
-	gm2 = gm$disjoin(target_gr)$agg(target_gr)
-	d2 = .gm_rawdat(gm2)
-	if (.is_template(d2,length(target_gr))){
-		return(gm2)
-	}
-	if (all(c('i','j','value') %in% names(d2)) && !anyDuplicated(as.data.table(list(i=d2[['i']],j=d2[['j']])))){
-		out = .fill_template_gm(target_gr,d2)
-		if (!is.null(out)){return(out)}
-	}
+	## Different bins: split counts by overlap (not gm$disjoin()$agg(), which copies each pixel's
+	## full value to every piece it is cut into and then sums the pieces, inflating the map)
+	d2 = .rebin_counts(gm,target_gr)
+	out = .fill_template_gm(target_gr,d2)
+	if (!is.null(out)){return(out)}
 	outdt = make_template_dat(target_gr)
 	setkey(outdt,i,j)
-	outdt[gm2$dat, on = .(i, j), value := i.value]
+	outdt[d2, on = .(i, j), value := i.value]
 	return(gM(gr=target_gr,dat=outdt))
+}
+
+## Count-conserving rebin of gm's upper-triangle pixels onto target_gr. Each source bin is cut by
+## the target bins, with f = overlap width / source bin width per piece, and a source pixel's value
+## goes to the target pixels of its pieces in proportion to f_i * f_j (counts assumed uniform within
+## a pixel). Ordered piece pairs are summed, so a split diagonal pixel gives 2 f_a f_b to its (a,b)
+## target pixel. Source bins nested in target bins are not cut: coarsening onto them is an exact sum.
+## Parts of the source outside target_gr are dropped. Returns data.table(i, j, value) with i <= j.
+.rebin_counts = function(gm,target_gr){
+	src = gm$gr
+	d = .gm_rawdat(gm)
+	ov = gr2dt(gr.findoverlaps(src,target_gr))
+	if (!nrow(ov) || !nrow(d)){
+		return(data.table(i=integer(),j=integer(),value=numeric()))
+	}
+	ov = ov[,.(s=query.id,t=subject.id,f=width/as.numeric(width(src))[query.id])]
+	pix = data.table(i=as.integer(d[['i']]),j=as.integer(d[['j']]),value=as.double(d[['value']]))
+	pix = merge(pix,ov[,.(i=s,ti=t,fi=f)],by='i',allow.cartesian=TRUE)
+	pix = merge(pix,ov[,.(j=s,tj=t,fj=f)],by='j',allow.cartesian=TRUE)
+	pix[,.(value=sum(value*fi*fj,na.rm=TRUE)),by=.(i=pmin(ti,tj),j=pmax(ti,tj))]
 }

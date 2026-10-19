@@ -1,8 +1,8 @@
 # End-to-end checks of sample.gwalks(). The legacy implementation it was once
 # compared against has been removed, so these check that the karyotype set does
 # not depend on how permutations are batched (chunksize) and that every sampled
-# walk set is structurally valid. chunksize must divide N: otherwise sample.gwalks
-# draws chunksize * (N %/% chunksize) permutations rather than N (known quirk).
+# walk set is structurally valid. Until 2026-10-19, N >= 2 * chunksize that chunksize
+# did not divide drew only chunksize * (N %/% chunksize) permutations.
 
 sample_hashes <- function(gg, N, chunksize) {
   set.seed(1)
@@ -23,6 +23,17 @@ test_that("sample.gwalks karyotype set does not depend on chunksize on repdup", 
 
   gg <- makerepdup(1e6, geometry = "trans")$graph
   expect_identical(sample_hashes(gg, 100, chunksize = 1e3), sample_hashes(gg, 100, chunksize = 20))
+})
+
+test_that("sample.gwalks draws exactly N karyotypes when chunksize does not divide N", {
+  skip_if_no_loosefix()
+
+  set.seed(42); gg <- gimme_bfb(1e6, 8, cycles = 5)$graph
+  set.seed(1)
+  walks <- sample.gwalks(gg, N = 25, return.gw = FALSE, remove.dups = FALSE,
+                         verbose = FALSE, mc.cores = 1, chunksize = 10)
+  expect_length(walks, 25)
+  expect_identical(sample_hashes(gg, 55, chunksize = 1e3), sample_hashes(gg, 55, chunksize = 10))
 })
 
 test_that("walks reported by sample.gwalks have plausible structure", {
