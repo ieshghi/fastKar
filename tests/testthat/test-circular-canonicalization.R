@@ -4,6 +4,10 @@
 # RC-equivalent circular karyotypes presented in different rotations
 # of their orbit with different canonical forms.
 
+# The R-side canonicalizer is sort_snodes() (the old R hasher hash_snodelist()
+# was removed); hash its canonical form so it can be compared like the C++ hash.
+hash_snodelist <- function(nodelist, circ) digest::digest(sort_snodes(nodelist, circ))
+
 test_that("circular karyotype: W and a rotation-of-rc(W) hash identically (C++)", {
   W1 <- c(3L, 1L, 4L, 1L, 5L)
   # rotation of -rev(W1):
