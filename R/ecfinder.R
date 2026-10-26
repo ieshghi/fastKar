@@ -1,16 +1,40 @@
-fastKar_ecfinder = function(gg,ft,hic.res,true_hic_path,ec_fraction_threshold = 0.6,n_sample=100,n_ec = 10,n_circle_samples=1000,n_hsr_samples=5000,figure_path = NULL,mc.cores=1,return_all=F,purity=1,rescale=F){
+fastKar_ecfinder = function(gg,ft,hic.res,true_hic_path,ec_fraction_threshold = 0.6,n_sample=100,n_ec = 10,n_circle_samples=1000,n_hsr_samples=5000,figure_path = NULL,mc.cores=1,return_all=F,purity=1,rescale=F,score_region=NULL,seed=NULL,depth=NULL,res_ladder=c(5e3,1e4,2.5e4,5e4,1e5,2.5e5,5e5,1e6)){
 	library(ggforce)
+	# true_hic_path = NULL: no Hi-C. Only asks whether the graph allows ecDNA and how separated the simulated ecDNA and HSR
+	# score distributions are (sep_D, sep_margin), at each Hi-C depth in 'depth' (required; X coverage as from
+	# estimate.depthratio). Bins tile the window at the res_ladder resolution closest to hic.res; no rescale, no observed
+	# score, no plots; call 'None'. Hypotheses are simulated once at depth[1] and scaled (simulated maps are linear in depth)
+	no_hic = is.null(true_hic_path)
+	if (no_hic && is.null(depth)){stop('fastKar_ecfinder: depth is required when true_hic_path is NULL')}
+	# seed: reproducible run (L'Ecuyer-CMRG streams, so forked mclapply workers are seeded too; same mc.cores needed)
+	if (!is.null(seed)){
+		old_kind = RNGkind("L'Ecuyer-CMRG")
+		set.seed(seed)
+		on.exit(RNGkind(old_kind[1]),add=TRUE)
+	}
+	# return_all = TRUE: also return the graph, hypotheses and observed/simulated maps (element 'hyp'), e.g. for figures
 	wholegenome = si2gr(hg_seqlengths(chr=FALSE)) %Q% (seqnames %in% c(1:22,'X','Y'))
 	if (is(ft,'character')){ft = streduce(parse.gr(ft))}
 	ft_context = streduce(ft + sum(width(ft))/10) #add 10% to the footprint for context
+	# score_region: Hi-C window to score (and plot) instead of the footprint + 10%, e.g. a few Mb around the amplified
+	# gene of a large multi-chromosome event, so bins are finer; hypotheses are still sampled on the whole footprint
+	if (!is.null(score_region)){
+		if (is(score_region,'character')){score_region = parse.gr(score_region)}
+		ft_context = streduce(score_region)
+	}
 	event_nodes = (gg$nodes$gr %&% ft)$node.id
 	message('Sampling and generating solutions')
 	# generate HSR and ecDNA solutions
 	ecdna_solns = boil_greedy(gg=gg,ft=ft,N=n_circle_samples,n_solns_try=n_ec,mc.cores=mc.cores) #karyotypes sampled to find circles
 	ecdna_circ = unname(unlist(lapply(
 		ecdna_solns,function(x){amp_circular_fraction(x,ft)})))
+	ecdna_all = ecdna_solns
 	ecdna_solns = ecdna_solns[ecdna_circ > ec_fraction_threshold]
-	if (!length(ecdna_solns)){return(list(call='CI', reason='No good ecDNA solutions'))}
+	if (!length(ecdna_solns)){
+		out = list(call='CI', reason='No good ecDNA solutions', max_ecdna_circ=max(c(0,ecdna_circ),na.rm=TRUE))
+		if (return_all){out$hyp = list(gg=gg,ft=ft,ecdna_candidates=ecdna_all,ecdna_circ=ecdna_circ)}
+		return(out)
+	}
 	hsr_solns = squeeze(gg=gg,ft=ft,N=n_hsr_samples,k_return=n_ec,verbose = F,mc.cores=mc.cores) #karyotypes sampled to pick the HSR solutions from
 	n_ec = length(ecdna_solns)
 	n_hsr = length(hsr_solns)
@@ -19,12 +43,18 @@ fastKar_ecfinder = function(gg,ft,hic.res,true_hic_path,ec_fraction_threshold = 
 		random_walks,function(x){amp_circular_fraction(x,ft)},mc.cores=mc.cores)))
 	# estimate depth of hi-c data and pick resolution to simulate at
 	ploidy = sum(gg$gr$cn*width(gg$gr))/sum(width(gg$gr))
-	is.chr = hic_is_chr(true_hic_path) #e.g. the NYU cell line mcools name chromosomes 'chr1', ...; graphs don't
-	depth = estimate.depthratio(true_hic_path,ploidy=ploidy,purity=purity,if.chr=is.chr)
-	hictype = tools::file_ext(true_hic_path)
 	if (hic.res<0){ #if hic.res < 0 this is asking for a number of bins to cover the footprint
 		hic.res = sum(width(ft_context))/abs(hic.res)
 	}
+	if (no_hic){
+		depths = depth
+		depth = depths[1]
+		hic.res = res_ladder[which.min(abs(log10(res_ladder) - log10(hic.res)))]
+		hic.gr = (gr.tile(wholegenome,hic.res) %&% ft_context)[,c()] #genome-aligned bins, as a cooler query returns
+	} else{
+	is.chr = hic_is_chr(true_hic_path) #e.g. the NYU cell line mcools name chromosomes 'chr1', ...; graphs don't
+	depth = estimate.depthratio(true_hic_path,ploidy=ploidy,purity=purity,if.chr=is.chr)
+	hictype = tools::file_ext(true_hic_path)
 	# now find available resolution that is closest to requested resolution
 	avail_res = hic_res(true_hic_path)
 	dists = abs(log10(avail_res) - log10(hic.res))
@@ -38,6 +68,7 @@ fastKar_ecfinder = function(gg,ft,hic.res,true_hic_path,ec_fraction_threshold = 
 	} else{true_hic = straw(true_hic_path,gr=ft_context,res=hic.res)}
 	hic.gr = true_hic$gr
 	true_hic = rebin_matrix(true_hic,hic.gr) #make sure the matrix matches future matrices (basically just adds in 0s)
+	}
 	message('Simulating Hi-C for hypotheses and random samples')
 	# simulate on the data bins themselves, so every simulated tile lies inside one bin and the rebin is an exact sum.
 	# all solutions are walks on gg, so the bins are tiled once and reused (walks on another graph are tiled anew)
@@ -54,53 +85,76 @@ fastKar_ecfinder = function(gg,ft,hic.res,true_hic_path,ec_fraction_threshold = 
 	# rescale = TRUE: the genome-wide depth estimate can be off locally, so scale every sim by one shared
 	# ratio = observed total / median total over all hypothesis and random sims (as in bestfit_search)
 	ratio = 1
-	if (rescale){
+	if (rescale && !no_hic){
 		ratio = sim_depth_ratio(true_hic,c(hsr_sims,ecdna_sims,random_sims),mc.cores=mc.cores)
 		hsr_sims = lapply(hsr_sims,function(s){s*ratio})
 		ecdna_sims = lapply(ecdna_sims,function(s){s*ratio})
 		random_sims = lapply(random_sims,function(s){s*ratio})
 	}
-	#simulate noise, 1 sample per random walk solution and n_sample for each ecDNA/HSR solution
-	n_ec_sample = n_sample %/% n_ec
-	n_hsr_sample = n_sample %/% n_hsr
-	message('Simulating noise')
-	hsr_noisy_sims = unlist(mclapply(hsr_sims,function(x){make_noisydat(x,n_hsr_sample)},
-					 mc.cores=mc.cores),recursive=F)
-	ec_noisy_sims = unlist(mclapply(ecdna_sims,function(x){make_noisydat(x,n_ec_sample)},
-					mc.cores=mc.cores),recursive=F)
-	random_noisy_sims = mclapply(random_sims,function(x){make_noisydat(x)[[1]]},mc.cores=mc.cores)
-	#
-	message('Scoring karyotypes')
-	area0 = median(width(ecdna_sims[[1]]$gr))^2
-	# ecDNA score is mean NLL over HSR solutions - mean NLL over ecDNA solutions (mean, not best-fit min: as accurate or
-	# better in the 2026-10-19 K-sweep on simulated truths, with fewer CI truths called ecDNA at large n_ec)
-	# pixel tables pulled out once: gm$dat copies the table on every access
-	hsr_dats = lapply(hsr_sims,function(sim){sim$dat})
-	ecdna_dats = lapply(ecdna_sims,function(sim){sim$dat})
-	true_dat = true_hic$dat
-	nll = function(dats,data,leave_out=NULL){
-		nlls = unlist(lapply(dats,function(d){compdats(data,d,area0=area0)}))
-		if (length(leave_out)){nlls = nlls[-leave_out]}
-		mean(nlls)}
-	combined_llr = function(x,leave_hsr=NULL,leave_ec=NULL){nll(hsr_dats,x,leave_hsr)-nll(ecdna_dats,x,leave_ec)}
-	# noisy samples are scored without the solution that generated them, since the real data's karyotype is not
-	# among the solutions either; done whenever each side has > 1 solution (switching on at > 3 left the null
-	# thresholds too far out for 2-3 solutions, so those calls mostly went to None in the K-sweep)
+	# noise and null scores for one set of sims: noisy samples of every solution scored against all solutions
+	score_null = function(hsr_sims,ecdna_sims,random_sims){
+		#simulate noise, 1 sample per random walk solution and n_sample for each ecDNA/HSR solution
+		n_ec_sample = n_sample %/% n_ec
+		n_hsr_sample = n_sample %/% n_hsr
+		message('Simulating noise')
+		hsr_noisy_sims = unlist(mclapply(hsr_sims,function(x){make_noisydat(x,n_hsr_sample)},
+						 mc.cores=mc.cores),recursive=F)
+		ec_noisy_sims = unlist(mclapply(ecdna_sims,function(x){make_noisydat(x,n_ec_sample)},
+						mc.cores=mc.cores),recursive=F)
+		random_noisy_sims = mclapply(random_sims,function(x){make_noisydat(x)[[1]]},mc.cores=mc.cores)
+		#
+		message('Scoring karyotypes')
+		area0 = median(width(ecdna_sims[[1]]$gr))^2
+		# ecDNA score is mean NLL over HSR solutions - mean NLL over ecDNA solutions (mean, not best-fit min: as accurate or
+		# better in the 2026-10-19 K-sweep on simulated truths, with fewer CI truths called ecDNA at large n_ec)
+		# pixel tables pulled out once: gm$dat copies the table on every access
+		hsr_dats = lapply(hsr_sims,function(sim){sim$dat})
+		ecdna_dats = lapply(ecdna_sims,function(sim){sim$dat})
+		nll = function(dats,data,leave_out=NULL){
+			nlls = unlist(lapply(dats,function(d){compdats(data,d,area0=area0)}))
+			if (length(leave_out)){nlls = nlls[-leave_out]}
+			mean(nlls)}
+		combined_llr = function(x,leave_hsr=NULL,leave_ec=NULL){nll(hsr_dats,x,leave_hsr)-nll(ecdna_dats,x,leave_ec)}
+		# noisy samples are scored without the solution that generated them, since the real data's karyotype is not
+		# among the solutions either; done whenever each side has > 1 solution (switching on at > 3 left the null
+		# thresholds too far out for 2-3 solutions, so those calls mostly went to None in the K-sweep)
+		leave_out = n_ec > 1 & n_hsr > 1
+		ec_src = rep(seq_len(n_ec),each=n_ec_sample)
+		hsr_src = rep(seq_len(n_hsr),each=n_hsr_sample)
+		# score all samples and true Hi-C
+		random_scores = mclapply(random_noisy_sims,combined_llr,mc.cores=mc.cores) %>% unlist
+		ec_scores = mclapply(seq_along(ec_noisy_sims),function(k){
+			combined_llr(ec_noisy_sims[[k]],leave_ec=if (leave_out) ec_src[k])},mc.cores=mc.cores) %>% unlist
+		hsr_scores = mclapply(seq_along(hsr_noisy_sims),function(k){
+			combined_llr(hsr_noisy_sims[[k]],leave_hsr=if (leave_out) hsr_src[k])},mc.cores=mc.cores) %>% unlist
+		#
+		dt = rbind(data.table(score=random_scores,type='Random',circle = random_circ),
+			   data.table(score=ec_scores,type='ecDNA'),
+			   data.table(score=hsr_scores,type='HSR'),
+			   fill=T)
+		list(dt=dt,combined_llr=combined_llr,hsr_dats=hsr_dats,ecdna_dats=ecdna_dats,area0=area0)
+	}
+	if (no_hic){ #one set of null scores per depth; sims scaled from depth[1]
+		dt = rbindlist(lapply(depths,function(d){
+			f = d/depth
+			sc = score_null(lapply(hsr_sims,function(s){s*f}),lapply(ecdna_sims,function(s){s*f}),lapply(random_sims,function(s){s*f}))
+			cbind(depth=d,sc$dt)
+		}))
+		sep_dt = dt[,c(list(sep_pval=suppressWarnings(ks.test(score[type=='HSR'],score[type=='ecDNA'])$p.value)),
+			       sep_stats(score[type=='ecDNA'],score[type=='HSR'])),by=depth]
+		out = list(call='None',reason='No Hi-C',n_ec=n_ec,n_hsr=n_hsr,leave_out=n_ec > 1 & n_hsr > 1,
+			   max_ecdna_circ=max(ecdna_circ,na.rm=TRUE),hic.res=hic.res,score_dt=dt,sep_dt=sep_dt)
+		if (return_all){
+			out$hyp = list(gg=gg,ft=ft,ft_context=ft_context,hic.res=hic.res,depth=depth,ecdna_solns=ecdna_solns,hsr_solns=hsr_solns,
+				       ecdna_sims=ecdna_sims,hsr_sims=hsr_sims)
+		}
+		return(out)
+	}
+	sc = score_null(hsr_sims,ecdna_sims,random_sims)
+	dt = sc$dt; combined_llr = sc$combined_llr; hsr_dats = sc$hsr_dats; ecdna_dats = sc$ecdna_dats; area0 = sc$area0
 	leave_out = n_ec > 1 & n_hsr > 1
-	ec_src = rep(seq_len(n_ec),each=n_ec_sample)
-	hsr_src = rep(seq_len(n_hsr),each=n_hsr_sample)
-	# score all samples and true Hi-C
-	random_scores = mclapply(random_noisy_sims,combined_llr,mc.cores=mc.cores) %>% unlist
-	ec_scores = mclapply(seq_along(ec_noisy_sims),function(k){
-		combined_llr(ec_noisy_sims[[k]],leave_ec=if (leave_out) ec_src[k])},mc.cores=mc.cores) %>% unlist
-	hsr_scores = mclapply(seq_along(hsr_noisy_sims),function(k){
-		combined_llr(hsr_noisy_sims[[k]],leave_hsr=if (leave_out) hsr_src[k])},mc.cores=mc.cores) %>% unlist
+	true_dat = true_hic$dat
 	true_llr = combined_llr(true_dat)
-	#
-	dt = rbind(data.table(score=random_scores,type='Random',circle = random_circ),
-		   data.table(score=ec_scores,type='ecDNA'),
-		   data.table(score=hsr_scores,type='HSR'),
-		   fill=T)
 	ecdna_nll = unlist(lapply(ecdna_dats,function(d){compdats(true_dat,d,area0=area0)}))
 	best_ecdna_ix = which.min(ecdna_nll)
 	hsr_nll = unlist(lapply(hsr_dats,function(d){compdats(true_dat,d,area0=area0)}))
@@ -143,15 +197,25 @@ fastKar_ecfinder = function(gg,ft,hic.res,true_hic_path,ec_fraction_threshold = 
 	dt_r = dt[type=='Random']
 	circ_cor = cor(dt_r$score,dt_r$circle)
 	ec_hsr_sep = ks.test(dt[type=='HSR']$score,dt[type=='ecDNA']$score)$p.value
-	if (ec_hsr_sep < 1e-2 & true_llr > ec_min){
-		return(list(call='ecDNA',sep_pval = ec_hsr_sep,circ_cor = circ_cor,ec_score_true = true_llr,score_dt=dt,sum_ratio=sum_ratio,depth_ratio=ratio,n_ec=n_ec,n_hsr=n_hsr,leave_out=leave_out))
-	}else if (ec_hsr_sep < 1e-2 & true_llr < hsr_max){
-		return(list(call='CI',sep_pval = ec_hsr_sep,circ_cor = circ_cor,ec_score_true = true_llr,score_dt=dt,sum_ratio=sum_ratio,depth_ratio=ratio,n_ec=n_ec,n_hsr=n_hsr,leave_out=leave_out))
-	}else{
-		return(list(call='None',sep_pval = ec_hsr_sep,circ_cor = circ_cor,ec_score_true = true_llr,score_dt=dt,sum_ratio=sum_ratio,depth_ratio=ratio,n_ec=n_ec,n_hsr=n_hsr,leave_out=leave_out))
+	call = if (ec_hsr_sep < 1e-2 & true_llr > ec_min) 'ecDNA' else if (ec_hsr_sep < 1e-2 & true_llr < hsr_max) 'CI' else 'None'
+	ss = sep_stats(dt[type=='ecDNA']$score,dt[type=='HSR']$score)
+	out = list(call=call,sep_pval = ec_hsr_sep,sep_D=ss$sep_D,sep_margin=ss$sep_margin,max_ecdna_circ=max(ecdna_circ,na.rm=TRUE),circ_cor = circ_cor,ec_score_true = true_llr,score_dt=dt,sum_ratio=sum_ratio,depth_ratio=ratio,n_ec=n_ec,n_hsr=n_hsr,leave_out=leave_out)
+	if (return_all){
+		out$hyp = list(gg=gg,ft=ft,ft_context=ft_context,hic.res=hic.res,true_hic=true_hic,
+			       ecdna_solns=ecdna_solns,hsr_solns=hsr_solns,ecdna_sims=ecdna_sims,hsr_sims=hsr_sims,
+			       ecdna_nll=ecdna_nll,hsr_nll=hsr_nll,best_ecdna_ix=best_ecdna_ix,best_hsr_ix=best_hsr_ix,likrat_gm=likrat_gm)
 	}
+	return(out)
 }
 
+
+# separation of the simulated ecDNA and HSR score distributions. sep_D: Kolmogorov-Smirnov D, the largest gap between
+# the two ECDFs (1 = no overlap; the best single score threshold misclassifies (1-D)/2 of samples at equal priors).
+# sep_margin: (ecDNA 5th percentile - HSR 95th percentile) / mean IQR, > 0 when the bulks are apart (D saturates at 1)
+sep_stats = function(ec,hsr){
+	list(sep_D=unname(suppressWarnings(ks.test(ec,hsr)$statistic)),
+	     sep_margin=unname((quantile(ec,0.05) - quantile(hsr,0.95))/((IQR(ec) + IQR(hsr))/2)))
+}
 
 find_circles = function(gg,ft,N,context.padding = 1e3,verbose=F,mc.cores=1){
 	if (is(ft,'character')){ft = streduce(parse.gr(ft))}
@@ -338,4 +402,29 @@ hic_is_chr = function(path) {
 	if (tools::file_ext(path) != 'mcool') return(FALSE)
 	chroms = rhdf5::h5read(path, paste0('/resolutions/', hic_res(path)[1], '/chroms/name'))
 	any(grepl('^chr', chroms))
+}
+
+## Hi-C scoring window around a focus locus (e.g. a FISH probe gene) inside a large amplicon, for fastKar_ecfinder(score_region=).
+## core: the contiguous run of nodes at CN > amp_mult x ploidy that overlaps focus (adjacent amplified nodes merged), +- pad;
+## plus +- partner_pad around the far breakpoints of ALT junctions with an end in the core and CN > amp_mult x ploidy.
+## Returns the reduced window (GRanges), or NULL if focus is not on an amplified node.
+focus_score_window = function(gg, focus, amp_mult = 2, pad = 3e5, partner_pad = 1e6){
+	if (is(focus,'character')){focus = parse.gr(focus)}
+	nd = gg$nodes$dt
+	ploidy = nd[!is.na(cn), sum(cn*as.numeric(width))/sum(as.numeric(width))]
+	amp = gg$nodes$gr[which(nd$cn > amp_mult*ploidy)]
+	if (!length(amp)) return(NULL)
+	segs = reduce(amp[, c()]) #adjacent amplified nodes become one segment
+	core = segs[segs %^% focus]
+	if (!length(core)) return(NULL)
+	core.nodes = (gg$nodes$gr %&% core)$node.id
+	alt = gg$edges[type == 'ALT' & cn > amp_mult*ploidy]
+	alt = alt[alt$dt$n1 %in% core.nodes | alt$dt$n2 %in% core.nodes]
+	win = core + pad
+	if (length(alt)){
+		bps = unlist(alt$junctions$grl)
+		bps = bps[!(bps %^% (core + pad))]
+		if (length(bps)){win = c(win[, c()], bps[, c()] + partner_pad)}
+	}
+	streduce(win[, c()])
 }

@@ -9,7 +9,16 @@ Encoding: UTF-8
 Roxygen: list(markdown = TRUE)
 RoxygenNote: 7.3.2
 Imports:
-    usethis,
+    BiocGenerics,
+    S4Vectors,
+    IRanges,
+    GenomicRanges,
+    GenomeInfoDb,
+    Matrix,
+    magrittr,
+    ggplot2,
+    ggforce,
+    viridis,
     skitools,
     gTrack,
     gGnome,
@@ -24,6 +33,14 @@ Imports:
     pbmcapply,
     pbapply
 LinkingTo: Rcpp
+Remotes:
+    mskilab-org/gGnome,
+    mskilab-org/gUtils,
+    mskilab-org/GxG,
+    mskilab-org/skitools,
+    mskilab-org/gTrack
+biocViews:
+LazyData: true
 Suggests:
     testthat (>= 3.0.0)
 Config/testthat/edition: 3

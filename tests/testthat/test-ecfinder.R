@@ -26,3 +26,19 @@ test_that('amp.entropy.raw matches amp.entropy on the fixture karyotypes', {
         }
     }
 })
+
+## sep_stats(): KS D and quantile margin of the simulated ecDNA vs HSR scores
+test_that('sep_stats gives D = 1 and a positive margin for disjoint scores, D < 1 when they overlap', {
+    s = sep_stats(ec = 10 + 1:50, hsr = -(1:50))
+    expect_equal(s$sep_D, 1)
+    expect_gt(s$sep_margin, 0)
+    s = sep_stats(ec = 1:50, hsr = 26:75)
+    expect_lt(s$sep_D, 1)
+    expect_lt(s$sep_margin, 0)
+})
+
+## Without Hi-C (true_hic_path = NULL) a depth must be given
+test_that('fastKar_ecfinder without Hi-C requires depth', {
+    fx = load_fixture('toy_bfb')
+    expect_error(fastKar_ecfinder(fx$gg, fx$ft, hic.res = -100, true_hic_path = NULL), 'depth is required')
+})

@@ -388,8 +388,14 @@ estimate.depthratio <- function(filepath,res=1e6,ploidy=2,if.chr=FALSE,purity=1)
     if (!is.numeric(ploidy) || length(ploidy) != 1 || is.na(ploidy) || ploidy <= 0){
         stop('ploidy must be a single positive numeric value')
     }
-    wholegenome = gr.tile(si2gr(hg_seqlengths()[1:24]),res)
     mode = tools::file_ext(filepath)
+    if (mode=='mcool'){ #chromosome lengths from the file itself, so any build works (e.g. hg38 Pore-C; hg19 files give the hg19 lengths)
+        chroms = rhdf5::h5read(filepath, paste0('/resolutions/', as.integer(res), '/chroms'))
+        main = grepl('^(chr)?([0-9]+|X|Y)$', chroms$name)
+        wholegenome = gr.tile(si2gr(setNames(as.numeric(chroms$length[main]), sub('^chr', '', chroms$name[main]))),res)
+    }else{
+        wholegenome = gr.tile(si2gr(hg_seqlengths()[1:24]),res)
+    }
     if (if.chr){
         wholegenome = gr.chr(wholegenome)
     }
@@ -546,77 +552,6 @@ callloops = function(hic,gw,depth,fdr_cut = 0.01,resolution = NULL,sim.dat = NUL
 		ppdf(qq_pval(compdat$nbinom_p,exp=simulated$nbinom_p,max.x=10,max.y=10),qqplot_path,width=5,height=4) 
 	}
 	return(outlier.gm)
-}
-
-#similar to above, but for each sample we only compare to nearest neighbors using markov sampling
-#	resolution can be positive or negative.
-#	If positive, it indicates a simulated Hi-C experiment of the given resolution.
-#	If negative, it indicates a long-read experiment of the given read length
-#	If a list is input as "resolution", then output will be a list of the same shape
-neighbor_separable = function(gg,n_init,n_neighbor,use.nodes=NULL,sep_cutoff = 0.9,sep_samples = 20,resolution=NULL,depth=10,footprint=NULL,mc.cores=1){
-	if (is.null(footprint)){footprint = gg$footprint}
-	if (!is.null(use.nodes)){
-		frozen.nodes = gg$nodes$dt[!(node.id %in% use.nodes)]$node.id
-	}
-	out = rep(NA,length(resolution))
-	names(out) = ifelse(resolution>0,paste0('hic_',as.character(resolution)),paste0('lr_',as.character(abs(resolution))))
-	#sample n_init sets of walks. Each walk goes only 2 steps since we want nearest-neighbors, and we sample n_neighbor walks going from each starting point
-	neighbors = mclapply(1:n_init,function(i){local.sampling(gg,nsteps=2,nwalk=n_neighbor,frozen.nodes=frozen.nodes)},mc.cores=mc.cores)
-	#from all that sampling, grab the first step of every walk set as the init walk from that set
-	init_gw = mclapply(neighbors,function(gwl){lapply(gwl,function(gwi){gW(graph=gg,snode.id=gwi[[1]]$snode.id,circular=gwi[[1]]$circular) %&% footprint})},mc.cores=mc.cores)
-	#now grab the second step of each of these as the nearest neighbor
-	neighbors_gw = mclapply(neighbors,function(gwl){lapply(gwl,function(gwi){gW(graph=gg,snode.id=gwi[[2]]$snode.id,circular=gwi[[2]]$circular) %&% footprint})},mc.cores=mc.cores)
-	#make a table of all the comparisons to be made between walks and their nearest neighbors
-	comppairs = CJ(init.id = seq_along(init_gw),neighbor.id = 1:n_neighbor)
-	#check which ones are identical (we sample allowing for overlaps) and throw out those samples
-	keep = lapply(1:nrow(comppairs),function(x){
-		gw1 = init_gw[[comppairs[x]$init.id]][[1]]
-		gw2 = neighbors_gw[[comppairs[x]$init.id]][[comppairs[x]$neighbor.id]]
-		gw1$hash!=gw2$hash}) %>% unlist
-	comppairs = comppairs[keep]
-	#if none are left then return NA, the analysis doesn't make sense in this case
-	if (nrow(comppairs)==0){return(out)}
-	## The init walk of set i is compared with each of its neighbors, so its simulated map (Hi-C)
-	## or read table (long reads) is computed once per (i, resolution) and reused for the following
-	## rows with the same i: a one-slot cache per resolution, so memory stays at one map. Rows are
-	## processed in the same order (sequentially, or per mclapply worker) and simulation/read
-	## generation use no RNG, so every sampling call sees the same RNG state as the reference.
-	init_cache = new.env()
-	init_side = function(i,y,make){
-		key = as.character(y)
-		hit = init_cache[[key]]
-		if (!is.null(hit) && identical(hit$i,i)){return(hit$val)}
-		val = make()
-		assign(key,list(i=i,val=val),envir=init_cache)
-		val
-	}
-	#for the remaining pairs apply every requested distance metric
-	sepdata = mclapply(1:nrow(comppairs),function(x){
-		i = comppairs[x]$init.id
-		j = comppairs[x]$neighbor.id
-		gw1 = init_gw[[i]][[1]]
-		gw2 = neighbors_gw[[i]][[j]]
-		outrow = lapply(1:length(resolution),function(y){
-			res = resolution[y]
-			if (res<0){
-				## liktest_separable_lr(gw1,gw2,readL=abs(res),depth=depth,nsamp=sep_samples,use.nodes=use.nodes)
-				readL = abs(res)
-				context = sum(width(gw1$graph$footprint)) + 2*readL
-				N = depth/(readL/context)
-				reads_1 = init_side(i,y,function(){reads_fromwalk(gw1,readL,minsize=0,use.nodes=use.nodes)})
-				reads_2 = reads_fromwalk(gw2,readL,minsize=0,use.nodes=use.nodes)
-				pq = .probdist_from_reads(list(reads_1,reads_2),background=1e-10)
-				1-.liktest_lr_core(pq,N,sep_samples)
-			}else if (res>0){
-				map_1 = init_side(i,y,function(){forward_simulate(gw1,target_region=footprint,pix.size=res,depth=depth)})
-				map_2 = forward_simulate(gw2,target_region=footprint,pix.size=res,depth=depth)
-				1 - liktest_separable(map_1,map_2,nsamp=sep_samples)
-			}
-		})
-		names(outrow) = names(out)
-		return(outrow)
-	},mc.cores=mc.cores) %>% rbindlist(use.names=T)
-	sepdata[, lapply(.SD, function(x) mean(x > sep_cutoff))]
 }
 
 group_klcomp = function(gw1, gw2=NULL,target_region = NULL, hic_resolution = NULL,depth=10,mc.cores=1){

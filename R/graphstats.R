@@ -533,7 +533,7 @@ reads_fromwalk = function(walk,readL,minsize=0,use.nodes=NULL){
 longread_kl = function(walk_x, walk_y, graph=NULL,readL=1e4, depth = 1, background = 1e-5,use.nodes=use.nodes,mc.cores=1) {
 	if (is.null(walk_x$graph)){
 		if(is.null(graph)){
-			error('Must provide either a gWalk object or a graph as input to function')
+			stop('Must provide either a gWalk object or a graph as input to function')
 		}
 		walk_x$graph = graph
 		walk_y$graph = graph
@@ -546,7 +546,7 @@ longread_kl = function(walk_x, walk_y, graph=NULL,readL=1e4, depth = 1, backgrou
 hic_kl = function(walk_x, walk_y, target_region=NULL, graph=NULL,pix.size=1e6, depth = 1,theta=2,mask=NULL) {
 	if (is.null(walk_x$graph)){
 		if(is.null(graph)){
-			error('Must provide either a gWalk object or a graph as input to function')
+			stop('Must provide either a gWalk object or a graph as input to function')
 		}
 		walk_x$graph = graph
 		walk_y$graph = graph
@@ -647,7 +647,7 @@ edit_dist_cpp = function(gwx,gwy,graph=NULL,return_all = F,constpenalty=F,use.no
 	if (is.null(graph)){
 		graph = gwx$graph
 		if (is.null(graph)){
-			error('Must provide a graph object or have a graph as an element of gwx')
+			stop('Must provide a graph object or have a graph as an element of gwx')
 		}
 	}
 	penalty = .edit_penalty(graph,constpenalty=constpenalty,use.nodes=use.nodes,node.widths=node.widths)
@@ -931,6 +931,73 @@ paste_loose_ends <- function(gg, seed = NULL, foldback = TRUE, region = NULL) {
     newgg$set(y.field = "cn")
     ## Attach these if you want to inspect what the heuristic did.
     newgg
+}
+
+## EagleC SV calls (the *_combined.txt table: chr1 pos1 chr2 pos2 then the probability of each orientation
+## ++ +- -+ --), one row per call and orientation with probability >= min_p, highest first.
+## EagleC's orientation is the opposite of gGnome's strand (as in sclarke's read_eagle, srctools R/EagleC.R):
+## EagleC '+' = gGnome '-' = right side of a node (at its end), EagleC '-' = gGnome '+' = left side (at its start).
+## gGnome junctions and loose ends use the same strand <-> side convention.
+read_eaglec = function(file, min_p = 0.1){
+	d = fread(file)
+	setnames(d, c('chr1','pos1','chr2','pos2','++','+-','-+','--'))
+	d[, call_id := .I]
+	d[, (5:8) := lapply(.SD, as.numeric), .SDcols = 5:8]
+	d = data.table::melt(d, id.vars = c('call_id','chr1','pos1','chr2','pos2'), variable.name = 'orient', value.name = 'p')[p >= min_p]
+	flip = c('+' = '-', '-' = '+')
+	d[, orient := as.character(orient)]
+	d[, `:=`(chr1 = gsub('chr','',chr1), chr2 = gsub('chr','',chr2),
+		 str1 = unname(flip[substr(orient,1,1)]), str2 = unname(flip[substr(orient,2,2)]))]
+	d[order(-p)]
+}
+
+## index of the nearest end (ends: seqnames, pos, strand) within tol of each breakpoint, same strand; NA if none
+.eaglec_near = function(chr, bp, str, ends, tol){
+	vapply(seq_along(chr), function(i){
+		d = abs(ends$pos - bp[i])
+		ok = which(ends$seqnames == chr[i] & ends$strand == str[i] & d <= tol)
+		if (length(ok)) ok[which.min(d[ok])] else NA_integer_}, 0L)
+}
+
+## Join loose ends with Hi-C junction calls (read_eaglec()) instead of the heuristic in paste_loose_ends().
+## A call is used if both its breakpoints lie within tol of a loose end with the matching strand and at least
+## one of the two loose ends is on a node overlapping region (NULL: anywhere). Calls are used in order of
+## probability, each with CN = min of the two ends' residual loose CN (both ends on one loose end: a foldback,
+## CN = residual %/% 2). Every other loose end stays loose (a walk endpoint). Calls whose partner is not a
+## loose end are not used (that would need a new breakpoint and CN at the partner, i.e. a graph refit).
+## Returns the new graph (always freshly built, so it never shares an edge table with gg), or with
+## return_all = TRUE list(gg, calls = calls touching region loose ends with the partner type, pasted, loose).
+paste_loose_ends_eaglec = function(gg, calls, region = NULL, tol = 1e4, return_all = FALSE){
+	lo = gr2dt(gg$loose)
+	lo = if (nrow(lo)) lo[cn > 0 & terminal == FALSE] else lo
+	lo = lo[, .(seqnames = as.character(seqnames), pos = start, strand = as.character(strand), node.id, orientation, cn)]
+	lo[, inreg := if (is.null(region)) TRUE else node.id %in% (gg$nodes$gr %&% region)$node.id]
+	calls = copy(calls)[, `:=`(lo1 = .eaglec_near(chr1, pos1, str1, lo, tol), lo2 = .eaglec_near(chr2, pos2, str2, lo, tol))]
+	calls[, `:=`(inreg1 = lo$inreg[lo1] %in% TRUE, inreg2 = lo$inreg[lo2] %in% TRUE)]
+	hit = calls[inreg1 | inreg2]
+	hit[, partner := ifelse(is.na(lo1) | is.na(lo2), 'no loose end',
+		ifelse(lo1 == lo2, 'same loose end (foldback)', ifelse(inreg1 & inreg2, 'loose end in region', 'loose end outside')))]
+	resid = as.integer(lo$cn)
+	moves = list()
+	for (r in which(!is.na(hit$lo1) & !is.na(hit$lo2))){
+		i = hit$lo1[r]; j = hit$lo2[r]
+		w = if (i == j) resid[i] %/% 2L else min(resid[i], resid[j])
+		if (w < 1) next
+		resid[i] = resid[i] - w; resid[j] = resid[j] - w
+		moves[[length(moves) + 1]] = data.table(call_id = hit$call_id[r], cn = w, n1 = lo$node.id[i], n2 = lo$node.id[j],
+							n1.side = lo$orientation[i], n2.side = lo$orientation[j])
+	}
+	pasted = rbindlist(moves)
+	edges = copy(gg$edges$dt)
+	if (nrow(pasted)){
+		newedges = pasted[, .(cn = sum(cn), type = 'ALT'), by = .(n1, n2, n1.side, n2.side)] #several calls can join the same two ends
+		edges = rbind(edges, newedges, fill = TRUE)
+	}
+	newgg = loosefix(gG(nodes = gg$nodes$gr, edges = edges))
+	newgg$set(y.field = 'cn')
+	if (!return_all) return(newgg)
+	lo[, cn_left := resid]
+	list(gg = newgg, calls = hit, pasted = pasted, loose = lo)
 }
 
 
