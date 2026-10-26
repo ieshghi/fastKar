@@ -1,4 +1,4 @@
-fastKar_ecfinder = function(gg,ft,hic.res,true_hic_path,ec_fraction_threshold = 0.6,n_sample=100,n_ec = 10,n_circle_samples=1000,n_hsr_samples=5000,figure_path = NULL,mc.cores=1,return_all=F,purity=1,rescale=F,score_region=NULL,seed=NULL,depth=NULL,res_ladder=c(5e3,1e4,2.5e4,5e4,1e5,2.5e5,5e5,1e6)){
+fastKar_ecfinder = function(gg,ft,hic.res,true_hic_path,ec_fraction_threshold = 0.6,n_sample=100,n_ec = 10,n_circle_samples=1000,n_hsr_samples=5000,figure_path = NULL,mc.cores=1,return_all=F,purity=1,rescale=F,score_region=NULL,seed=NULL,depth=NULL,sep_D_min=0.95,res_ladder=c(5e3,1e4,2.5e4,5e4,1e5,2.5e5,5e5,1e6)){
 	library(ggforce)
 	# true_hic_path = NULL: no Hi-C. Only asks whether the graph allows ecDNA and how separated the simulated ecDNA and HSR
 	# score distributions are (sep_D, sep_margin), at each Hi-C depth in 'depth' (required; X coverage as from
@@ -13,6 +13,8 @@ fastKar_ecfinder = function(gg,ft,hic.res,true_hic_path,ec_fraction_threshold = 
 		on.exit(RNGkind(old_kind[1]),add=TRUE)
 	}
 	# return_all = TRUE: also return the graph, hypotheses and observed/simulated maps (element 'hyp'), e.g. for figures
+	# sep_D_min: a Hi-C call (ecDNA or CI) needs the simulated ecDNA and HSR score distributions to be separated, KS p < 0.01
+	# and KS D >= sep_D_min (the p-value alone passes heavy overlap at 100 samples per side, e.g. D = 0.5); otherwise 'None'
 	wholegenome = si2gr(hg_seqlengths(chr=FALSE)) %Q% (seqnames %in% c(1:22,'X','Y'))
 	if (is(ft,'character')){ft = streduce(parse.gr(ft))}
 	ft_context = streduce(ft + sum(width(ft))/10) #add 10% to the footprint for context
@@ -105,13 +107,15 @@ fastKar_ecfinder = function(gg,ft,hic.res,true_hic_path,ec_fraction_threshold = 
 		#
 		message('Scoring karyotypes')
 		area0 = median(width(ecdna_sims[[1]]$gr))^2
+		# pixel areas from the bins: noisy samples carry widthprod, the observed gMatrix table does not
+		bin_widths = width(hic.gr)
 		# ecDNA score is mean NLL over HSR solutions - mean NLL over ecDNA solutions (mean, not best-fit min: as accurate or
 		# better in the 2026-10-19 K-sweep on simulated truths, with fewer CI truths called ecDNA at large n_ec)
 		# pixel tables pulled out once: gm$dat copies the table on every access
 		hsr_dats = lapply(hsr_sims,function(sim){sim$dat})
 		ecdna_dats = lapply(ecdna_sims,function(sim){sim$dat})
 		nll = function(dats,data,leave_out=NULL){
-			nlls = unlist(lapply(dats,function(d){compdats(data,d,area0=area0)}))
+			nlls = unlist(lapply(dats,function(d){compdats(data,d,area0=area0,widths=bin_widths)}))
 			if (length(leave_out)){nlls = nlls[-leave_out]}
 			mean(nlls)}
 		combined_llr = function(x,leave_hsr=NULL,leave_ec=NULL){nll(hsr_dats,x,leave_hsr)-nll(ecdna_dats,x,leave_ec)}
@@ -132,7 +136,7 @@ fastKar_ecfinder = function(gg,ft,hic.res,true_hic_path,ec_fraction_threshold = 
 			   data.table(score=ec_scores,type='ecDNA'),
 			   data.table(score=hsr_scores,type='HSR'),
 			   fill=T)
-		list(dt=dt,combined_llr=combined_llr,hsr_dats=hsr_dats,ecdna_dats=ecdna_dats,area0=area0)
+		list(dt=dt,combined_llr=combined_llr,hsr_dats=hsr_dats,ecdna_dats=ecdna_dats,area0=area0,bin_widths=bin_widths)
 	}
 	if (no_hic){ #one set of null scores per depth; sims scaled from depth[1]
 		dt = rbindlist(lapply(depths,function(d){
@@ -151,13 +155,13 @@ fastKar_ecfinder = function(gg,ft,hic.res,true_hic_path,ec_fraction_threshold = 
 		return(out)
 	}
 	sc = score_null(hsr_sims,ecdna_sims,random_sims)
-	dt = sc$dt; combined_llr = sc$combined_llr; hsr_dats = sc$hsr_dats; ecdna_dats = sc$ecdna_dats; area0 = sc$area0
+	dt = sc$dt; combined_llr = sc$combined_llr; hsr_dats = sc$hsr_dats; ecdna_dats = sc$ecdna_dats; area0 = sc$area0; bin_widths = sc$bin_widths
 	leave_out = n_ec > 1 & n_hsr > 1
 	true_dat = true_hic$dat
 	true_llr = combined_llr(true_dat)
-	ecdna_nll = unlist(lapply(ecdna_dats,function(d){compdats(true_dat,d,area0=area0)}))
+	ecdna_nll = unlist(lapply(ecdna_dats,function(d){compdats(true_dat,d,area0=area0,widths=bin_widths)}))
 	best_ecdna_ix = which.min(ecdna_nll)
-	hsr_nll = unlist(lapply(hsr_dats,function(d){compdats(true_dat,d,area0=area0)}))
+	hsr_nll = unlist(lapply(hsr_dats,function(d){compdats(true_dat,d,area0=area0,widths=bin_widths)}))
 	best_hsr_ix = which.min(hsr_nll)
 	likrat_gm = compmaps(true_hic,hsr_sims[[best_hsr_ix]]) - compmaps(true_hic,ecdna_sims[[best_ecdna_ix]])
 	likrat_max = max(abs(likrat_gm$value))
@@ -197,9 +201,10 @@ fastKar_ecfinder = function(gg,ft,hic.res,true_hic_path,ec_fraction_threshold = 
 	dt_r = dt[type=='Random']
 	circ_cor = cor(dt_r$score,dt_r$circle)
 	ec_hsr_sep = ks.test(dt[type=='HSR']$score,dt[type=='ecDNA']$score)$p.value
-	call = if (ec_hsr_sep < 1e-2 & true_llr > ec_min) 'ecDNA' else if (ec_hsr_sep < 1e-2 & true_llr < hsr_max) 'CI' else 'None'
 	ss = sep_stats(dt[type=='ecDNA']$score,dt[type=='HSR']$score)
-	out = list(call=call,sep_pval = ec_hsr_sep,sep_D=ss$sep_D,sep_margin=ss$sep_margin,max_ecdna_circ=max(ecdna_circ,na.rm=TRUE),circ_cor = circ_cor,ec_score_true = true_llr,score_dt=dt,sum_ratio=sum_ratio,depth_ratio=ratio,n_ec=n_ec,n_hsr=n_hsr,leave_out=leave_out)
+	separated = ec_hsr_sep < 1e-2 & ss$sep_D >= sep_D_min
+	call = if (separated & true_llr > ec_min) 'ecDNA' else if (separated & true_llr < hsr_max) 'CI' else 'None'
+	out = list(call=call,sep_pval = ec_hsr_sep,sep_D=ss$sep_D,sep_D_min=sep_D_min,sep_margin=ss$sep_margin,max_ecdna_circ=max(ecdna_circ,na.rm=TRUE),circ_cor = circ_cor,ec_score_true = true_llr,score_dt=dt,sum_ratio=sum_ratio,depth_ratio=ratio,n_ec=n_ec,n_hsr=n_hsr,leave_out=leave_out)
 	if (return_all){
 		out$hyp = list(gg=gg,ft=ft,ft_context=ft_context,hic.res=hic.res,true_hic=true_hic,
 			       ecdna_solns=ecdna_solns,hsr_solns=hsr_solns,ecdna_sims=ecdna_sims,hsr_sims=hsr_sims,
