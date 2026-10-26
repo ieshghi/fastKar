@@ -71,3 +71,27 @@ test_that('make_noisydat draws are reproducible and centred on the map', {
     sd_tot = sqrt(sum(mu + mu^2 / 2))   # NB(size = 2) variance mu + mu^2 / size
     for (s in x) expect_lt(abs(sum(s$value) - sum(mu)), 5 * sd_tot)
 })
+
+test_that('NLLs weight each pixel by its area width_i * width_j / area0', {
+    for (nm in c('toy_dtrans', 'ccle_dm_local')) {
+        m = prop_maps(nm); mu = m$a
+        set.seed(7); o = opt('make_noisymap')(mu, 1)[[1]]
+        w = as.numeric(GenomicRanges::width(mu$gr))
+        if (nm == 'ccle_dm_local') expect_gt(length(unique(w)), 1) ## tiles cut at node boundaries: uneven pixels
+        ## by hand, on the observed table (which carries no widthprod)
+        d = merge(o$dat[, .(i, j, x = value)], mu$dat[, .(i, j, y = value)], by = c('i', 'j'))
+        lp = dnbinom(round(d$x), mu = d$y, size = 2, log = TRUE); lp[d$y == 0] = 0
+        manual = -sum(lp * w[d$i] * w[d$j]) / median(w)^2
+        expect_equal(opt('compmaps')(o, mu, ifsum = TRUE), manual, tolerance = 1e-10)
+        ## compdats: widths for a gMatrix table give what a widthprod column gives
+        dw = data.table::copy(o$dat)[, widthprod := w[i] * w[j]]
+        expect_equal(opt('compdats')(o$dat, mu$dat, widths = w, area0 = 1e10), opt('compdats')(dw, mu$dat, area0 = 1e10), tolerance = 1e-12)
+        expect_equal(opt('compdats')(o$dat, mu$dat, widths = w, area0 = median(w)^2), manual, tolerance = 1e-10)
+        ## evenly spaced bins: every weight is 1, so the NLL is the plain sum
+        bins = gUtils::gr.tile(GenomicRanges::reduce(mu$gr), 2e5); bins = bins[GenomicRanges::width(bins) == 2e5]
+        ob = opt('rebin_matrix')(o, bins); mb = opt('rebin_matrix')(mu, bins)
+        db = merge(ob$dat[, .(i, j, x = value)], mb$dat[, .(i, j, y = value)], by = c('i', 'j'))
+        lpb = dnbinom(round(db$x), mu = db$y, size = 2, log = TRUE); lpb[db$y == 0] = 0
+        expect_equal(opt('compmaps')(ob, mu, ifsum = TRUE), -sum(lpb), tolerance = 1e-10)
+    }
+})

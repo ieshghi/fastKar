@@ -230,15 +230,17 @@ sample_local_candidates <- function(ctx, n_neighbors = 99, n_walkers = 200, n_sw
 ## Hi-C NLL of n_obs noisy maps of kars[[1]] (the truth) under every candidate:
 ## an n_obs x length(kars) matrix. Candidates are simulated once, scaled to
 ## each map's depth by the first candidate's total, and scored by the negative
-## binomial likelihood summed over pixels, vectorised over maps. Pixels are unweighted, as there: the observed map
-## reaches compdats() without a widthprod column, so every pixel gets area0.
+## binomial likelihood summed over pixels, vectorised over maps. Each pixel is weighted by its area
+## width_i * width_j / pix.size^2 (as compdats() does): the tiles are cut at node boundaries, and a sliver
+## tile should not count as much as a full pixel.
 local_hic_nll_matrix <- function(kars, ctx, n_obs = 100, depth = 10, theta = 2) {
     true_expected = forward_simulate(kars[[1]], target_region = ctx$target_region,
                                      pix.size = ctx$pix.size, depth = depth)
     obs = make_noisydat(true_expected, nsamp = n_obs, theta = theta)
     gr = true_expected$gr
-    template = make_template_dat(gr)[, .(i, j, id)]
+    template = make_template_dat(gr)[, .(i, j, id, widthprod)]
     setkey(template, id)
+    weight = template$widthprod / ctx$pix.size^2
     X = round(vapply(obs, function(d) d[template, on = 'id']$value, numeric(nrow(template))))
     X = matrix(X, nrow = nrow(template))
 
@@ -258,7 +260,7 @@ local_hic_nll_matrix <- function(kars, ctx, n_obs = 100, depth = 10, theta = 2) 
         nz = Y[, k] > 0
         mu = outer(Y[nz, k], ratio)
         lp = matrix(dnbinom(X[nz, , drop = FALSE], mu = mu, size = theta, log = TRUE), nrow = sum(nz))
-        out[, k] = -colSums(lp, na.rm = TRUE)
+        out[, k] = -colSums(lp * weight[nz], na.rm = TRUE)
     }
     out
 }

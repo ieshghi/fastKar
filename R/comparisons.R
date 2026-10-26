@@ -56,12 +56,20 @@
 	-logprob*wp/area0
 }
 
+## Pixel areas widthprod = width_i * width_j of a pixel table: its widthprod column if it has one,
+## else from the tile widths (indexed by i, j), else area0 (all pixels taken to be the same size)
+.pixel_areas = function(dat, widths, area0){
+	if (!is.null(dat$widthprod)) return(dat[['widthprod']])
+	if (!is.null(widths)) return(as.numeric(widths)[dat[['i']]]*as.numeric(widths)[dat[['j']]])
+	area0
+}
+
 ## Fast compdats() core for an aligned pair (see .aligned_pair). Returns the per-pixel values
 ## and the row subset (keep = NULL: all rows) that compdats(ifsum = FALSE) would return.
-.compdats_aligned = function(dat_test, dat_true, theta, if.diag, return_kl, area0){
+.compdats_aligned = function(dat_test, dat_true, theta, if.diag, return_kl, area0, widths = NULL){
 	x = dat_test[['value']]
 	y = dat_true[['value']]
-	wp = if (is.null(dat_test$widthprod)) area0 else dat_test[['widthprod']]
+	wp = .pixel_areas(dat_test, widths, area0)
 	keep = NULL
 	if (if.diag==FALSE){
 		keep = which(dat_test[['i']] != dat_test[['j']])
@@ -340,21 +348,23 @@ kl_nb <- function(mu1, mu2, r=2,tinyval=1e-10,ifsum=T) { #get KL divergence betw
   }
 }
 
+#' Per-pixel NB NLL (or KL) of map_exp under map_theory, both on map_exp's bins, each pixel weighted by its
+#' area width_i * width_j / area0. area0 defaults to the squared median bin width of map_exp, so on evenly
+#' spaced observed bins every weight is 1 (only partial bins differ)
 compmaps = function(map_exp,map_theory,theta=2,ifsum=F,if.diag=T,ifscale=F,mask=NULL,return_kl=F,area0=NULL,maskzeros=F){
    if (is.null(area0)){
-	gr = map_theory$gr
-        medianwid = median(width(gr))
-	area0 = medianwid^2
+	area0 = median(width(map_exp$gr))^2
    }
    map_theory = rebin_matrix(map_theory,map_exp$gr)
    map_exp = rebin_matrix(map_exp,map_exp$gr)
+   widths = width(map_exp$gr)
    ## Fast path: both maps on the same template (the usual case after rebin_matrix). This is
    ## compdats(map_exp$dat, map_theory$dat, ...) on the aligned value vectors, without the two
    ## table copies, the setkey, the all.equal check and the merge.
    dat_exp = .gm_rawdat(map_exp)
    dat_theory = .gm_rawdat(map_theory)
    if (.compdats_fast_ok(theta,return_kl,area0) && .aligned_pair(dat_exp,dat_theory)){
-       res = .compdats_aligned(dat_exp,dat_theory,theta,if.diag,return_kl,area0)
+       res = .compdats_aligned(dat_exp,dat_theory,theta,if.diag,return_kl,area0,widths)
        value = res$value
        if (!is.null(mask)){
            bad.inds = (map_exp$gr %&% mask)$tile.id
@@ -369,7 +379,7 @@ compmaps = function(map_exp,map_theory,theta=2,ifsum=F,if.diag=T,ifscale=F,mask=
            return(gM(gr=map_exp$gr,dat=.compdats_table(dat_exp,res)))
        }
    }
-   comp_dat = compdats(map_exp$dat,map_theory$dat,theta,ifsum=FALSE,if.diag=if.diag,return_kl=return_kl,area0=area0)
+   comp_dat = compdats(map_exp$dat,map_theory$dat,theta,ifsum=FALSE,if.diag=if.diag,return_kl=return_kl,area0=area0,widths=widths)
    if (!is.null(mask)){
        bad.inds = (map_exp$gr %&% mask)$tile.id
        comp_dat[(i %in% bad.inds) & (j %in% bad.inds),value:=0]
@@ -412,14 +422,16 @@ estimate.depthratio <- function(filepath,res=1e6,ploidy=2,if.chr=FALSE,purity=1)
     return(depthest.hic$value%>%sum * 300 / 3e9 * 2/sample.ploidy)
 }
 
-#returns negative log likelihood of test data given true data
-compdats = function(dat_test,dat_true,theta=2,ifsum=TRUE,if.diag=TRUE,return_kl=F,area0=1e8){
+#returns negative log likelihood of test data given true data, each pixel weighted by widthprod/area0
+#widthprod: dat_test's column if present, else widths[i]*widths[j] (widths = tile widths of the map's gr,
+#needed for gMatrix $dat tables, which carry no widthprod), else area0 (all pixels weighted 1)
+compdats = function(dat_test,dat_true,theta=2,ifsum=TRUE,if.diag=TRUE,return_kl=F,area0=1e8,widths=NULL){
     setkey(dat_test,'id')
     setkey(dat_true,'id')
     ## fast path: same template on both sides (identical i/j/id after the sort), so the merge
     ## below is a row-by-row pairing and the all.equal() check passes
     if (.compdats_fast_ok(theta,return_kl,area0) && .aligned_pair(dat_test,dat_true)){
-        res = .compdats_aligned(dat_test,dat_true,theta,if.diag,return_kl,area0)
+        res = .compdats_aligned(dat_test,dat_true,theta,if.diag,return_kl,area0,widths)
         if (ifsum==TRUE){
             return(sum(res$value,na.rm=TRUE))
         }else{
@@ -427,7 +439,7 @@ compdats = function(dat_test,dat_true,theta=2,ifsum=TRUE,if.diag=TRUE,return_kl=
         }
     }
     if (is.null(dat_test$widthprod)){
-        dat_test$widthprod= area0 #if the data.table doesn't have an area column, assume all pixels are the same size
+        dat_test$widthprod = .pixel_areas(dat_test, widths, area0)
     }
     if (all.equal(dat_test[,.(i,j,id)],dat_true[,.(i,j,id)])!=T){
 	    stop('Equalize gMatrices before comparing data')}
