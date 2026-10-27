@@ -55,7 +55,9 @@ estimate.depthratio(hic, ploidy = ploidy) when NULL.}
 \item{method}{'pt' (parallel tempering) or 'greedy' (all chains at T = 0).}
 
 \item{chains, steps, block, tmin, tmax, seed}{search settings: chains (= PT rungs), proposals per chain, proposals
-between temperature swaps, geometric ladder tmin..tmax, random seed.}
+between temperature swaps, geometric ladder tmin..tmax, random seed.
+The defaults converge on small events (<= ~50 nodes); graphs with > 200 nodes get a warning that more
+steps may be needed.}
 
 \item{device}{'auto' (GPU if available, else CPU with a warning), 'gpu' (fail without one), 'cpu'.}
 

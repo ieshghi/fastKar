@@ -345,6 +345,8 @@ kinf_check = function(python = NULL, backend = c('local', 'slurm'), device = c('
 #' @param method 'pt' (parallel tempering) or 'greedy' (all chains at T = 0).
 #' @param chains,steps,block,tmin,tmax,seed search settings: chains (= PT rungs), proposals per chain, proposals
 #'   between temperature swaps, geometric ladder tmin..tmax, random seed.
+#'   The defaults converge on small events (<= ~50 nodes); graphs with > 200 nodes get a warning that more
+#'   steps may be needed.
 #' @param device 'auto' (GPU if available, else CPU with a warning), 'gpu' (fail without one), 'cpu'.
 #' @param gpu local backend: GPU index (sets CUDA_VISIBLE_DEVICES); NULL leaves it unset.
 #' @param cores local backend: CPU cores to pin the Python process to, e.g. 0:7 (each JAX process otherwise
@@ -385,6 +387,9 @@ infer_karyotype = function(gg, hic, depth = NULL, pix.size = 1e6, target_region 
   if (purity != 1) stop('purity != 1 is not supported by the Python model yet')
   py = kinf_python(python)
   .kinf_check_graph(gg)
+  if (length(gg$nodes) > 200)
+    warning('large graph (', length(gg$nodes), ' nodes): the search may need more steps than ', steps,
+            ' to converge; check whether trace$best is still falling at the end', call. = FALSE)
   if (!is.null(truth) && !inherits(truth, 'gWalk')) stop('truth must be a gWalk on gg')
   if (is.null(target_region)) target_region = streduce(gg$nodes$gr)
   if (is.null(workdir))
