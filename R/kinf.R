@@ -362,15 +362,20 @@ kinf_check = function(python = NULL, backend = c('local', 'slurm'), device = c('
 #' @param rescale as bestfit_search(rescale = TRUE): multiply depth by observed total / median expected total
 #'   over random wirings (the analogue of its sampled candidates) before the search. TRUE = 256 random wirings,
 #'   or give the number. The ratio and the depth used are in summary (depth_ratio, depth).
+#' @param history_every record the NLL of every chain every history_every proposals (and at step 0) for
+#'   convergence plots; returned as history (data.table steps, chain, T = the chain's temperature then, nll; minus
+#'   the truth NLL when truth is given). 0: off. The best-so-far curve is cummin over chains.
 #' @param python kinf interpreter (default kinf_python()).
 #' @return list(gw = gWalk on gg, summary = list from summary.json, trace = data.table of the search curve
 #'   (best and per-rung NLL per block), workdir); with topk > 1 also kars (list of gWalks, best first) and nlls;
+#'   with history_every > 0 also history;
 #'   with backend = 'slurm', wait = FALSE a kinf_job handle.
 infer_karyotype = function(gg, hic, depth = NULL, pix.size = 1e6, target_region = NULL, ploidy = 2, purity = 1,
                            method = c('pt', 'greedy'), chains = 16, steps = 20000, block = 500, tmin = 1,
                            tmax = 1000, seed = 0, device = c('auto', 'gpu', 'cpu'), gpu = NULL, cores = NULL,
                            backend = c('local', 'slurm'), slurm = list(), wait = TRUE, workdir = NULL,
-                           truth = NULL, topk = 1, rescale = FALSE, python = NULL, verbose = TRUE){
+                           truth = NULL, topk = 1, rescale = FALSE, history_every = 0, python = NULL,
+                           verbose = TRUE){
   method = match.arg(method); device = match.arg(device); backend = match.arg(backend)
   if (purity != 1) stop('purity != 1 is not supported by the Python model yet')
   py = kinf_python(python)
@@ -404,7 +409,7 @@ infer_karyotype = function(gg, hic, depth = NULL, pix.size = 1e6, target_region 
                    target_region = target_region, write.to.folder = paste0(pdir, '/'), truth = truth)
   job = .kinf_launch(problem = pdir, workdir = workdir, python = py,
                      args = list(method = method, chains = chains, steps = steps, block = block, tmin = tmin,
-                                 tmax = tmax, seed = seed, topk = topk,
+                                 tmax = tmax, seed = seed, topk = topk, history = as.integer(history_every),
                                  rescale = if (isTRUE(rescale)) 256L else as.integer(rescale),
                                  device = if (backend == 'slurm' && device == 'auto') 'gpu' else device),
                      truth = !is.null(truth), backend = backend, slurm = slurm, wait = wait, gpu = gpu,
@@ -420,6 +425,7 @@ infer_karyotype = function(gg, hic, depth = NULL, pix.size = 1e6, target_region 
              summary = jsonlite::read_json(file.path(odir, 'summary.json'), simplifyVector = TRUE),
              trace = data.table::fread(file.path(odir, 'trace.tsv')),
              workdir = job$workdir)
+  if (file.exists(file.path(odir, 'history.tsv'))) out$history = data.table::fread(file.path(odir, 'history.tsv'))
   if (file.exists(file.path(odir, 'topk.json'))) out = c(out, read_kinf_topk(file.path(odir, 'topk.json'), job$graph))
   out
 }

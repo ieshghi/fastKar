@@ -14,10 +14,12 @@ import delta
 import optimize as opt
 
 def run(P, method='pt', chains=16, steps=20000, block=500, tmin=1.0, tmax=1000.0, seed=0, D=None,
-        nll_ref=0.0, trace=None, log=print, log_every=10, topk=1):
+        nll_ref=0.0, trace=None, log=print, log_every=10, topk=1, history=None, history_every=0):
     """P: model.load_problem(...). Returns dict(b = best wiring (delta encoding), nll, perms (hard permutations
     {node: (CN,CN)}), summary, top). nll_ref is subtracted from every reported NLL (e.g. the truth NLL -> gaps).
     trace: open text file for the per-block curve (steps, best, current NLL per rung, all minus nll_ref).
+    history, history_every > 0: open text file for the NLL of every chain every history_every proposals (and at
+    step 0), with the temperature the chain had then: columns steps, chain, T, nll (minus nll_ref).
     topk > 1: each chain also keeps the 2*topk lowest-NLL states it visited (any rung), counting states whose NLLs
     agree to 1e-9 (relative) once (copy relabelings of one karyotype have the same NLL); top = the topk best of
     these over all chains as a list of dict(nll, perms), distinct as karyotypes (dedup in topk_karyotypes())."""
@@ -58,10 +60,10 @@ def run(P, method='pt', chains=16, steps=20000, block=500, tmin=1.0, tmax=1000.0
             better = st['nll'] < bnll
             if K:
                 bf = buf_insert(bf[0], bf[1], st['nll'], st['b'])
-            return (st, jnp.where(better, st['nll'], bnll), jnp.where(better, st['b'], bb), acc + ok, bf), None
-        (state, bnll, bb, acc, buf), _ = jax.lax.scan(step, (state, best[0], best[1], 0, buf),
-                                                       jax.random.split(key, block))
-        return state, (bnll, bb), acc, buf
+            return (st, jnp.where(better, st['nll'], bnll), jnp.where(better, st['b'], bb), acc + ok, bf), st['nll']
+        (state, bnll, bb, acc, buf), ys = jax.lax.scan(step, (state, best[0], best[1], 0, buf),
+                                                        jax.random.split(key, block))
+        return state, (bnll, bb), acc, buf, ys
 
     key = jax.random.PRNGKey(seed)
     r0 = opt.random_perms(P, jax.random.fold_in(key, 999), C)
@@ -70,6 +72,11 @@ def run(P, method='pt', chains=16, steps=20000, block=500, tmin=1.0, tmax=1000.0
     bufs = [buf_insert(jnp.full(K, jnp.inf), jnp.zeros((K,) + s['b'].shape, s['b'].dtype), s['nll'], s['b'])
             if K else () for s in states]
     rung = np.arange(C)  # rung[c] = temperature index of chain c
+    hist = history is not None and history_every > 0
+    if hist:
+        history.write('steps\tchain\tT\tnll\n')
+        for c in range(C):
+            history.write(f"0\t{c}\t{temps[rung[c]]:g}\t{float(states[c]['nll']) - nll_ref:.10g}\n")
     if trace is not None:
         trace.write('steps\tbest\t' + '\t'.join(f'T{t:g}' for t in temps) + '\n')
     acc_tot = np.zeros(C); sw_try = np.zeros(max(C - 1, 1)); sw_acc = np.zeros(max(C - 1, 1))
@@ -77,8 +84,13 @@ def run(P, method='pt', chains=16, steps=20000, block=500, tmin=1.0, tmax=1000.0
     for blk in range(nb):
         for c in range(C):
             key, k = jax.random.split(key)
-            states[c], bests[c], acc, bufs[c] = run_block(states[c], bests[c], k, temps[rung[c]], bufs[c])
+            states[c], bests[c], acc, bufs[c], ys = run_block(states[c], bests[c], k, temps[rung[c]], bufs[c])
             acc_tot[rung[c]] += float(acc)
+            if hist:
+                ix = np.arange(history_every - 1, block, history_every)
+                yv = np.asarray(ys)[ix] - nll_ref
+                history.write(''.join(f"{blk * block + i + 1}\t{c}\t{temps[rung[c]]:g}\t{v:.10g}\n"
+                                      for i, v in zip(ix, yv)))
         E = np.array([float(s['nll']) for s in states])
         if method == 'pt':
             at = np.argsort(rung)  # chain at each rung

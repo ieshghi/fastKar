@@ -29,6 +29,7 @@ infer_karyotype(
   truth = NULL,
   topk = 1,
   rescale = FALSE,
+  history_every = 0,
   python = NULL,
   verbose = TRUE
 )
@@ -82,11 +83,16 @@ and deduplicated as karyotypes.}
 over random wirings (the analogue of its sampled candidates) before the search. TRUE = 256 random wirings,
 or give the number. The ratio and the depth used are in summary (depth_ratio, depth).}
 
+\item{history_every}{record the NLL of every chain every history_every proposals (and at step 0) for
+convergence plots; returned as history (data.table steps, chain, T = the chain's temperature then, nll; minus
+the truth NLL when truth is given). 0: off. The best-so-far curve is cummin over chains.}
+
 \item{python}{kinf interpreter (default kinf_python()).}
 }
 \value{
 list(gw = gWalk on gg, summary = list from summary.json, trace = data.table of the search curve
 (best and per-rung NLL per block), workdir); with topk > 1 also kars (list of gWalks, best first) and nlls;
+with history_every > 0 also history;
 with backend = 'slurm', wait = FALSE a kinf_job handle.
 }
 \description{

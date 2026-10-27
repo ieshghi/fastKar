@@ -85,3 +85,21 @@ test_that('the slurm backend writes a job script, submits it and collects the re
     expect_s3_class(res$gw, 'gWalk')
     expect_true(isTRUE(res$summary$exact_recovery))
 })
+
+test_that('history_every records every chain and agrees with the per-block trace', {
+    skip_if_no_loosefix()
+    skip_if_not(kinf_available(), 'kinf Python not configured (install_kinf())')
+    data.table::setDTthreads(1)
+    x = kinf_toy(pix = 5e4)
+    res = infer_karyotype(x$gg, x$gm, depth = x$depth, pix.size = x$pix, target_region = x$ft, chains = 3,
+                          steps = 500, block = 250, truth = x$truth, history_every = 25, verbose = FALSE)
+    h = res$history
+    expect_equal(names(h), c('steps', 'chain', 'T', 'nll'))
+    expect_equal(sort(unique(h$steps)), seq(0, 500, by = 25))
+    expect_true(all(h[, .N, by = steps]$N == 3))
+    ## at block ends the chains' NLLs are the trace's per-rung NLLs
+    for (b in res$trace$steps) {
+        tv = sort(unlist(res$trace[steps == b, -(1:2)]))
+        expect_equal(sort(h[steps == b]$nll), unname(tv), tolerance = 1e-5)
+    }
+})

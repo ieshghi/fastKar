@@ -4,10 +4,12 @@ Input: a problem folder written by R/prep_data_for_py.R (or from R, use infer_ka
 which writes the folder, calls this script and reads the result back as a gWalk).
 Output (OUT): gwalks.json (best karyotype: signed snode ids on the gGraph passed to prep_data_for_py, circular
 flags; read in R with read_kinf_gwalks()), summary.json, trace.tsv (best and per-rung NLL per block), best_b.npy;
-with --topk K > 1 also topk.json (the K best distinct karyotypes visited: list of {nll, snode.ids, circular}).
+with --topk K > 1 also topk.json (the K best distinct karyotypes visited: list of {nll, snode.ids, circular});
+with --history N > 0 also history.tsv (NLL of every chain every N proposals: steps, chain, T, nll; minus the truth
+NLL with --truth), for convergence plots.
 
 Usage: python infer.py PROBLEM OUT [--method pt|greedy] [--chains 16] [--steps 20000] [--block 500]
-       [--tmin 1] [--tmax 1000] [--seed 0] [--device auto|gpu|cpu] [--truth] [--topk 1] [--rescale 0]
+       [--tmin 1] [--tmax 1000] [--seed 0] [--device auto|gpu|cpu] [--truth] [--topk 1] [--rescale 0] [--history 0]
 Run with PYTHONPATH unset (env -u PYTHONPATH); entries from PYTHONPATH are dropped from sys.path here as well.
 """
 import os, sys
@@ -32,6 +34,8 @@ def parse():
                     help='auto: GPU if available, else CPU with a warning; gpu: fail without a GPU [auto]')
     ap.add_argument('--topk', type=int, default=1,
                     help='also write the K best distinct karyotypes visited by any chain to topk.json [1: off]')
+    ap.add_argument('--history', type=int, default=0, metavar='N',
+                    help='write the NLL of every chain every N proposals to history.tsv [0: off]')
     ap.add_argument('--rescale', type=int, default=0, metavar='N',
                     help='rescale depth by observed total / median expected total over N random wirings, as '
                          'fastKar bestfit_search(rescale = TRUE) does over its sampled candidates [0: off]')
@@ -70,10 +74,13 @@ def main():
         log(f'truth NLL {nll_truth:.6g} (reported values below are gaps to it)')
 
     os.makedirs(a.out, exist_ok=True)
+    hist = open(os.path.join(a.out, 'history.tsv'), 'w') if a.history > 0 else None
     with open(os.path.join(a.out, 'trace.tsv'), 'w') as tr:
         res = search.run(P, method=a.method, chains=a.chains, steps=a.steps, block=a.block, tmin=a.tmin,
                          tmax=a.tmax, seed=a.seed, nll_ref=nll_truth or 0.0, trace=tr, log=log,
-                         topk=a.topk)
+                         topk=a.topk, history=hist, history_every=a.history)
+    if hist is not None:
+        hist.close()
 
     wk, circular = walks.perms_to_walks(P, res['perms'])
     with open(os.path.join(a.out, 'gwalks.json'), 'w') as f:
