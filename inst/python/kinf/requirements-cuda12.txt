@@ -1,0 +1,5 @@
+# kinf Python dependencies, NVIDIA GPU build (CUDA 12 wheels; needs only an NVIDIA driver, no system CUDA)
+jax[cuda12]==0.10.0
+jaxlib==0.10.0
+numpy==2.4.4
+pandas==2.3.3

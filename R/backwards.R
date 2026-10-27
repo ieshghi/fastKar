@@ -1,4 +1,22 @@
-prep_data_for_py <- function(gg,gm,depth,purity=1,pix.size=1e5,target_region=NULL,write.to.folder=NULL){ 
+#' Export a gGraph + Hi-C map as a problem folder for the Python karyotype search (kinf)
+#'
+#' Splits every node in the target region into a left and a right half, gives each copy of each half-node its
+#' own id, fixes the junction copies to half-node copies, tiles the target at pix.size (cut at half-node
+#' boundaries), and rebins the observed map onto the tiles with rebin_matrix() (count-conserving). The only free
+#' choice left is, at each node with CN > 1, which left-half copy continues into which right-half copy.
+#' Used by infer_karyotype(); the folder is read by load_problem() in inst/python/kinf/model.py.
+#'
+#' @param gg gGraph with node and junction copy numbers (cn).
+#' @param gm gMatrix of observed counts.
+#' @param depth Hi-C depth (fastKar convention).
+#' @param purity only 1 is supported by the Python model.
+#' @param pix.size tile size (bp).
+#' @param target_region GRanges to export; default gg$footprint.
+#' @param write.to.folder folder path ending in '/'; NULL: return the tables only.
+#' @param truth optional gWalk on gg (simulations): also writes truth_gwalks.json and truth_expected.csv (the
+#'   noiseless forward_simulate() map on the export's own tiling; i, j index rows of tiled_target.csv).
+#' @return named list of the exported tables.
+prep_data_for_py <- function(gg,gm,depth,purity=1,pix.size=1e5,target_region=NULL,write.to.folder=NULL,truth=NULL){ 
   if (is.null(target_region)){
     target_region = gg$footprint
   }
@@ -55,7 +73,8 @@ prep_data_for_py <- function(gg,gm,depth,purity=1,pix.size=1e5,target_region=NUL
   dedup.nodes = merge.data.table(dedup.nodes,nodesdt.split[,.(node_id=node.id,side,width)],by=c('node_id','side'),all.x=TRUE)[,.(node_id,side,unique.id,width)]
 
   # rebin Hi-C data to match simulation tiles
-  gm_rebin = gm$disjoin(tiled.target)$agg(tiled.target)
+  # (fastKar::rebin_matrix splits counts by overlap and conserves the total; gm$disjoin()$agg() inflates cut tiles)
+  gm_rebin = rebin_matrix(gm,tiled.target)
   
   # put in a named list and write to files for Python to read
   data.out = list(tiled_target = gr2dt(tiled.target),dedup_tiles = dedup.tiles, nodes = dedup.nodes, internal_edges = internal_edges, external_edges = external_edges,gm_dat = gm_rebin$dat,depth=depth,purity=purity)
@@ -64,6 +83,23 @@ prep_data_for_py <- function(gg,gm,depth,purity=1,pix.size=1e5,target_region=NUL
       thisname = names(data.out)[i]
       write.csv(data.out[[i]],paste0(write.to.folder,thisname,'.csv'))
     })
+  }
+  # optional ground truth (a gWalk): noiseless R map at the same depth, simulated on the EXPORT's own tiling
+  # (rows of tiled_target.csv, tile.id = row index), so truth_expected.csv i,j index tiled_target.csv rows
+  if (!is.null(truth) && !is.null(write.to.folder)){
+    nodesgr.t = truth$graph$gr[,c('node.id','cn')]
+    nodesgr.t = nodesgr.t[strand(nodesgr.t)=='+']
+    tt.gr = tiled.target[,c()]
+    ov = gr.findoverlaps(tt.gr,nodesgr.t)
+    ov = ov[!duplicated(ov$query.id)]
+    tt.dt = gr2dt(tt.gr)[,.(start,end,seqnames,width)][,tile.id:=.I]
+    tt.dt[ov$query.id,`:=`(node.id=nodesgr.t$node.id[ov$subject.id],cn=nodesgr.t$cn[ov$subject.id])]
+    tt.dt[is.na(node.id),cn:=0]
+    tt.dt[,compartment:='A']
+    prepped.t = list(tiled.target=tt.dt[,.(start,end,seqnames,tile.id,width,node.id,cn,compartment)],widthdt=gr2dt(nodesgr.t)[,.(nodewidth=width,node.id)])
+    truth_sim = forward_simulate(truth,pix.size=pix.size,depth=depth,purity=purity,prepped=prepped.t)
+    write.csv(truth_sim$dat[,.(i,j,value)],paste0(write.to.folder,'truth_expected.csv'),row.names=FALSE)
+    writeLines(jsonlite::toJSON(list(snode.ids = lapply(truth$snode.id,function(x){as.integer(x)}), circular = as.logical(truth$circular)),auto_unbox=FALSE),paste0(write.to.folder,'truth_gwalks.json'))
   }
   return(data.out)
 }

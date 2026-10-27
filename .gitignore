@@ -7,3 +7,7 @@ src/*.so
 src/*.dll
 src/symbols.rds
 .ipynb_checkpoints/
+
+# kinf (inst/python/kinf) Python caches
+__pycache__/
+*.pyc

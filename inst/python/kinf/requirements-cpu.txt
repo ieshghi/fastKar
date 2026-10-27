@@ -1,0 +1,5 @@
+# kinf Python dependencies, CPU build (pinned to the tested versions)
+jax==0.10.0
+jaxlib==0.10.0
+numpy==2.4.4
+pandas==2.3.3
