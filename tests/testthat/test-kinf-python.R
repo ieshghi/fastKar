@@ -132,3 +132,20 @@ test_that('init warm-starts chains from a previous (coarser) run or a gWalk, and
                                  chains = 2, steps = 250, block = 250, init = other$truth, verbose = FALSE),
                  'do not fit this problem')
 })
+
+test_that('Python and R agree when the footprint covers only part of the graph (outside nodes wired, not tiled)', {
+    skip_if_no_loosefix()
+    skip_if_not(kinf_available(), 'kinf Python not configured (install_kinf())')
+    data.table::setDTthreads(1)
+    ## whole-graph fixtures whose footprint cuts through nodes (ccle_dm: chr2 node 16.2-53.1 Mb covered at both ends)
+    for (nm in c('ccle_pyrgo', 'ccle_dm')) {
+        x = kinf_toy(nm, pix = NULL, depth = 30)
+        ex = kinf_export(x)
+        expect_gt(length(x$gg$nodes), length(x$gg$nodes %&% x$ft))
+        wd = tempfile('kinf_sub_'); dir.create(wd)
+        opt('.kinf_launch')(problem = ex$dir, workdir = wd, python = kinf_python(),
+                            args = list(chains = 2, steps = 100, block = 50), truth = TRUE, verbose = FALSE)
+        s = jsonlite::read_json(file.path(wd, 'out', 'summary.json'), simplifyVector = TRUE)
+        expect_equal(s$nll_truth, kinf_ref_nll(ex$dir), tolerance = 1e-9, info = nm)
+    }
+})

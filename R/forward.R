@@ -68,7 +68,7 @@ prep_for_sim = function(walks,target_region=NULL,pix.size=1e5,if.comps=F){
     }
     nodesgr = walks$graph$gr[,c('node.id','cn')] 
     nodesgr = nodesgr[strand(nodesgr)=='+']
-    widthdt = gr2dt(nodesgr)[,.(nodewidth=width,node.id)]
+    widthdt = gr2dt(nodesgr)[,.(nodewidth=width,node.id,start,end)] #start/end: walk_rows() needs them for nodes the target only partly covers
     #then, subset to target region or make target region if not provided
     if (is.null(target_region)){
         if (is.null(walks$footprint)){
@@ -214,18 +214,32 @@ walks_hit_target = function(snode.id,target.nodes){
 
 #' Local rows (tiles in walk order) of a set of walks, as simulate_walks() lays them out
 #'
-#' Each node visit expands into the node's tiles in the target tiling, in tiling order (reversed on
-#' the minus strand), or into one untiled row with the node's full width if the node has no tiles.
+#' Each node visit expands into the node's rows in genomic order (reversed on the minus strand): its tiles in
+#' the target tiling plus one untiled row for every part of the node the target does not cover (before, between
+#' and after its tiles), or one untiled row with the node's full width if the node has no tiles. Without the
+#' untiled parts, tiles on either side of a gap in the target would sit next to each other along the walk.
+#' @param widthdt node.id, nodewidth, start, end of every node (prep_for_sim())
 #' @return list(walk_ptr = 0-based row offsets per walk (length W+1), orig = tile.id or NA,
 #'   width = row width (numeric), int_width = whether the reference width column is integer)
 walk_rows = function(snode.id,tiled.target,widthdt){
+    if (!all(c('start','end') %in% names(widthdt))){
+        stop('widthdt needs the node start and end columns (see prep_for_sim())')
+    }
     lens = base::lengths(snode.id)
     flat = unlist(snode.id,use.names=FALSE)
     v = abs(flat)
-    tt_node = tiled.target$node.id
-    tt_rows = which(!is.na(tt_node))
-    tt_rows = tt_rows[order(tt_node[tt_rows], tt_rows)]
-    rl = rle(tt_node[tt_rows])
+    # per tiled node, its rows in genomic order: tiles (orig = tile.id) and the uncovered parts (orig = NA)
+    tt = data.table(node.id = tiled.target$node.id, orig = as.integer(tiled.target$tile.id), start = as.numeric(tiled.target$start),
+                    end = as.numeric(tiled.target$end), width = as.numeric(tiled.target$width), r = seq_len(nrow(tiled.target)))[!is.na(node.id)]
+    setorder(tt, node.id, start, r)
+    nd = match(tt$node.id, widthdt$node.id)
+    tt[, `:=`(nstart = as.numeric(widthdt$start[nd]), nend = as.numeric(widthdt$end[nd]))]
+    tt[, prev_end := shift(end, fill = nstart[1] - 1), by = node.id]
+    gaps = rbind(tt[start - prev_end > 1, .(node.id, pos = start - 0.5, orig = NA_integer_, width = start - prev_end - 1)],
+                 tt[tt[, .I[.N], by = node.id]$V1][nend > end, .(node.id, pos = end + 0.5, orig = NA_integer_, width = nend - end)])
+    tpl = rbind(tt[, .(node.id, pos = start, orig, width)], gaps)
+    setorder(tpl, node.id, pos)
+    rl = rle(tpl$node.id)
     rl_first = cumsum(c(1L, rl$lengths))[seq_along(rl$values)]
     mt = match(v, rl$values)
     ntile = ifelse(is.na(mt), 0L, rl$lengths[mt])
@@ -235,17 +249,17 @@ walk_rows = function(snode.id,tiled.target,widthdt){
     minus = flat[vis] < 0
     k[minus] = nrow_visit[vis[minus]] - k[minus] + 1L
     tiled = ntile[vis] > 0
-    tile = rep(NA_integer_, length(vis))
-    tile[tiled] = tt_rows[rl_first[mt[vis[tiled]]] + k[tiled] - 1L]
-    width = tiled.target$width[tile]
+    row = rep(NA_integer_, length(vis))
+    row[tiled] = rl_first[mt[vis[tiled]]] + k[tiled] - 1L
+    orig = tpl$orig[row]
+    width = tpl$width[row]
     untiled = !tiled
-    nodewidth = widthdt$nodewidth[match(v[vis[untiled]], widthdt$node.id)]
-    width[untiled] = if (is.integer(width)) as.integer(nodewidth) else nodewidth
+    width[untiled] = as.numeric(widthdt$nodewidth[match(v[vis[untiled]], widthdt$node.id)])
     walk_ptr = c(0, cumsum(as.numeric(nrow_visit)))[cumsum(c(0, lens)) + 1]
     list(walk_ptr = walk_ptr,
-         orig = as.integer(tiled.target$tile.id[tile]),
-         width = as.numeric(width),
-         int_width = is.integer(width))
+         orig = orig,
+         width = width,
+         int_width = is.integer(tiled.target$width))
 }
 
 #' Model constants for the C++ walk kernel, read from the package data at call time

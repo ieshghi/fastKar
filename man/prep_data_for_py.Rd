@@ -26,7 +26,7 @@ prep_data_for_py(
 
 \item{pix.size}{tile size (bp).}
 
-\item{target_region}{GRanges to export; default gg$footprint.}
+\item{target_region}{GRanges to tile and score (the Hi-C fit region); default gg$footprint. Nodes outside it are still wired.}
 
 \item{write.to.folder}{folder path ending in '/'; NULL: return the tables only.}
 
@@ -37,9 +37,11 @@ noiseless forward_simulate() map on the export's own tiling; i, j index rows of 
 named list of the exported tables.
 }
 \description{
-Splits every node in the target region into a left and a right half, gives each copy of each half-node its
+Splits every node of gg into a left and a right half, gives each copy of each half-node its
 own id, fixes the junction copies to half-node copies, tiles the target at pix.size (cut at half-node
-boundaries), and rebins the observed map onto the tiles with rebin_matrix() (count-conserving). The only free
+boundaries), and rebins the observed map onto the tiles with rebin_matrix() (count-conserving). Nodes outside
+the target are wired like the others but get no tiles: they enter the fit only through the walk distances
+between target tiles. The only free
 choice left is, at each node with CN > 1, which left-half copy continues into which right-half copy.
 Used by infer_karyotype(); the folder is read by load_problem() in inst/python/kinf/model.py.
 }

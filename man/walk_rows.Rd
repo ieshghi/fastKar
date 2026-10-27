@@ -6,11 +6,16 @@
 \usage{
 walk_rows(snode.id, tiled.target, widthdt)
 }
+\arguments{
+\item{widthdt}{node.id, nodewidth, start, end of every node (prep_for_sim())}
+}
 \value{
 list(walk_ptr = 0-based row offsets per walk (length W+1), orig = tile.id or NA,
 width = row width (numeric), int_width = whether the reference width column is integer)
 }
 \description{
-Each node visit expands into the node's tiles in the target tiling, in tiling order (reversed on
-the minus strand), or into one untiled row with the node's full width if the node has no tiles.
+Each node visit expands into the node's rows in genomic order (reversed on the minus strand): its tiles in
+the target tiling plus one untiled row for every part of the node the target does not cover (before, between
+and after its tiles), or one untiled row with the node's full width if the node has no tiles. Without the
+untiled parts, tiles on either side of a gap in the target would sit next to each other along the walk.
 }

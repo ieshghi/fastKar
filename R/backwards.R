@@ -1,8 +1,10 @@
 #' Export a gGraph + Hi-C map as a problem folder for the Python karyotype search (kinf)
 #'
-#' Splits every node in the target region into a left and a right half, gives each copy of each half-node its
+#' Splits every node of gg into a left and a right half, gives each copy of each half-node its
 #' own id, fixes the junction copies to half-node copies, tiles the target at pix.size (cut at half-node
-#' boundaries), and rebins the observed map onto the tiles with rebin_matrix() (count-conserving). The only free
+#' boundaries), and rebins the observed map onto the tiles with rebin_matrix() (count-conserving). Nodes outside
+#' the target are wired like the others but get no tiles: they enter the fit only through the walk distances
+#' between target tiles. The only free
 #' choice left is, at each node with CN > 1, which left-half copy continues into which right-half copy.
 #' Used by infer_karyotype(); the folder is read by load_problem() in inst/python/kinf/model.py.
 #'
@@ -11,7 +13,7 @@
 #' @param depth Hi-C depth (fastKar convention).
 #' @param purity only 1 is supported by the Python model.
 #' @param pix.size tile size (bp).
-#' @param target_region GRanges to export; default gg$footprint.
+#' @param target_region GRanges to tile and score (the Hi-C fit region); default gg$footprint. Nodes outside it are still wired.
 #' @param write.to.folder folder path ending in '/'; NULL: return the tables only.
 #' @param truth optional gWalk on gg (simulations): also writes truth_gwalks.json and truth_expected.csv (the
 #'   noiseless forward_simulate() map on the export's own tiling; i, j index rows of tiled_target.csv).
@@ -25,8 +27,8 @@ prep_data_for_py <- function(gg,gm,depth,purity=1,pix.size=1e5,target_region=NUL
   nodesgr = gg$nodes$gr
   edgesdt = gg$edges$dt[,.(cn,n1,n2,n1.side,n2.side,type)]
 
-  #make sure edges of nodes and target region match
-  targetnodes = gr2dt(gr.merge(target_region,nodesgr))
+  #every node of the graph is wired (walks through nodes outside the target set the distances between target tiles), but only the target is tiled and scored
+  targetnodes = gr2dt(nodesgr)
 
   #split nodes in half: our model of walks on the genome graph requires that we optimize over all possible wirings of left-junctions to right-junctions at a given node. To this end we consider the left- and right- halves of a node as distinct.
   nodesdt.split = targetnodes[rep(1:.N,each=2)][,side:=ifelse(mod(.I,2)==1,'left','right')][,.(start,end,seqnames,node.id,cn,side)][,width:=ifelse(side=='left',floor((end-start+1)/2),ceil((end-start+1)/2))]
@@ -96,7 +98,7 @@ prep_data_for_py <- function(gg,gm,depth,purity=1,pix.size=1e5,target_region=NUL
     tt.dt[ov$query.id,`:=`(node.id=nodesgr.t$node.id[ov$subject.id],cn=nodesgr.t$cn[ov$subject.id])]
     tt.dt[is.na(node.id),cn:=0]
     tt.dt[,compartment:='A']
-    prepped.t = list(tiled.target=tt.dt[,.(start,end,seqnames,tile.id,width,node.id,cn,compartment)],widthdt=gr2dt(nodesgr.t)[,.(nodewidth=width,node.id)])
+    prepped.t = list(tiled.target=tt.dt[,.(start,end,seqnames,tile.id,width,node.id,cn,compartment)],widthdt=gr2dt(nodesgr.t)[,.(nodewidth=width,node.id,start,end)])
     truth_sim = forward_simulate(truth,pix.size=pix.size,depth=depth,purity=purity,prepped=prepped.t)
     write.csv(truth_sim$dat[,.(i,j,value)],paste0(write.to.folder,'truth_expected.csv'),row.names=FALSE)
     writeLines(jsonlite::toJSON(list(snode.ids = lapply(truth$snode.id,function(x){as.integer(x)}), circular = as.logical(truth$circular)),auto_unbox=FALSE),paste0(write.to.folder,'truth_gwalks.json'))

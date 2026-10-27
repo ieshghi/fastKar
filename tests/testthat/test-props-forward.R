@@ -137,3 +137,25 @@ test_that('a reused prep_for_sim() result gives the same output', {
         }
     }
 })
+
+test_that('a target with gaps gives the same pixels as the full target (gaps inside nodes keep their length)', {
+    ## the sub-target is every other block of 3 tiles of the full tiling, so many gaps fall inside nodes; walk_rows()
+    ## used to drop the untiled part of such nodes, which made tiles on either side of a gap neighbours
+    for (nm in c('toy_bfb', 'toy_repdup', 'toy_circ')) {
+        fx = load_fixture(nm)
+        full = streduce(fx$gg$nodes$gr)
+        a = fs(fx$gw[[1]], target_region = full, pix.size = 1e4, gm.out = FALSE)
+        tiles = dt2gr(a$gr)
+        grid = gr.tile(full, 1e4) # blocks of whole grid tiles, so the sub-target tiles are full-target tiles
+        sub = streduce(grid[((seq_along(grid) - 1) %/% 3) %% 2 == 0])
+        b = fs(fx$gw[[1]], target_region = sub, pix.size = 1e4, gm.out = FALSE)
+        bt = dt2gr(b$gr)
+        m = match(paste(seqnames(bt), start(bt), end(bt), bt$node.id), paste(seqnames(tiles), start(tiles), end(tiles), tiles$node.id)) # toy_circ has overlapping nodes
+        expect_false(anyNA(m), info = nm)
+        expect_lt(length(bt), length(tiles))
+        ad = data.table::as.data.table(a$dat)[, .(i, j, va = value)]
+        bd = data.table::as.data.table(b$dat)[, .(i = pmin(m[i], m[j]), j = pmax(m[i], m[j]), vb = value)]
+        cmp = merge(bd, ad, by = c('i', 'j'), all.x = TRUE)
+        expect_equal(cmp$vb, cmp$va, tolerance = 1e-10, info = nm)
+    }
+})
