@@ -30,6 +30,8 @@ infer_karyotype(
   topk = 1,
   rescale = FALSE,
   history_every = 0,
+  init = NULL,
+  init_random = 0,
   python = NULL,
   verbose = TRUE
 )
@@ -86,6 +88,12 @@ or give the number. The ratio and the depth used are in summary (depth_ratio, de
 \item{history_every}{record the NLL of every chain every history_every proposals (and at step 0) for
 convergence plots; returned as history (data.table steps, chain, T = the chain's temperature then, nll; minus
 the truth NLL when truth is given). 0: off. The best-so-far curve is cummin over chains.}
+
+\item{init}{warm start (e.g. a fine-resolution run from a coarse one on the same graph and target region): a
+previous infer_karyotype() result or kinf_job (its top-k karyotypes if it has them, else its best), a path to
+a best_b.npy / gwalks.json / topk.json, or a gWalk on gg. Chains take these wirings in order (round robin).}
+
+\item{init_random}{with init: leave this many chains on random starts (a control).}
 
 \item{python}{kinf interpreter (default kinf_python()).}
 }

@@ -10,6 +10,7 @@ NLL with --truth), for convergence plots.
 
 Usage: python infer.py PROBLEM OUT [--method pt|greedy] [--chains 16] [--steps 20000] [--block 500]
        [--tmin 1] [--tmax 1000] [--seed 0] [--device auto|gpu|cpu] [--truth] [--topk 1] [--rescale 0] [--history 0]
+       [--init FILE] [--init-random 0]
 Run with PYTHONPATH unset (env -u PYTHONPATH); entries from PYTHONPATH are dropped from sys.path here as well.
 """
 import os, sys
@@ -34,6 +35,12 @@ def parse():
                     help='auto: GPU if available, else CPU with a warning; gpu: fail without a GPU [auto]')
     ap.add_argument('--topk', type=int, default=1,
                     help='also write the K best distinct karyotypes visited by any chain to topk.json [1: off]')
+    ap.add_argument('--init', metavar='FILE',
+                    help='warm start: best_b.npy (or a stack of b rows, .npy) or a gwalks.json / topk.json from a '
+                         'previous run on the same graph and target region (any pix.size); chains take the given '
+                         'wirings in order, round robin')
+    ap.add_argument('--init-random', type=int, default=0, metavar='N',
+                    help='with --init: leave the last N chains on random starts (control) [0]')
     ap.add_argument('--history', type=int, default=0, metavar='N',
                     help='write the NLL of every chain every N proposals to history.tsv [0: off]')
     ap.add_argument('--rescale', type=int, default=0, metavar='N',
@@ -73,12 +80,19 @@ def main():
         nll_truth = float(model.make_model(P).loss_perms(walks.walks_to_perms(P, sn, circ)))
         log(f'truth NLL {nll_truth:.6g} (reported values below are gaps to it)')
 
+    init = load_init(P, a.init) if a.init else None
+    if init:
+        try:
+            init = [w if isinstance(w, dict) else search.check_b(P, w) for w in init]
+        except ValueError as e:
+            sys.exit(f'error: --init {a.init}: {e}')
     os.makedirs(a.out, exist_ok=True)
     hist = open(os.path.join(a.out, 'history.tsv'), 'w') if a.history > 0 else None
     with open(os.path.join(a.out, 'trace.tsv'), 'w') as tr:
         res = search.run(P, method=a.method, chains=a.chains, steps=a.steps, block=a.block, tmin=a.tmin,
                          tmax=a.tmax, seed=a.seed, nll_ref=nll_truth or 0.0, trace=tr, log=log,
-                         topk=a.topk, history=hist, history_every=a.history)
+                         topk=a.topk, history=hist, history_every=a.history, init=init,
+                         init_random=a.init_random)
     if hist is not None:
         hist.close()
 
@@ -101,6 +115,25 @@ def main():
     json.dump(summ, open(os.path.join(a.out, 'summary.json'), 'w'), indent=1)
     log('done: ' + json.dumps({k: v for k, v in summ.items() if k in
         ('best_nll', 'gap_to_truth', 'exact_recovery', 'n_walks', 'n_circular', 'wall_s', 'ms_per_proposal')}))
+
+def load_init(P, path):
+    """warm-start wirings from a file: .npy = one b (1-D) or a stack (2-D); .json = gwalks.json ({snode.ids,
+    circular}) or topk.json (a list of them), converted with walks.walks_to_perms."""
+    import numpy as np
+    import walks
+    if path.endswith('.npy'):
+        b = np.load(path)
+        return [b] if b.ndim == 1 else list(b)
+    x = json.load(open(path))
+    ks = x if isinstance(x, list) else [x]
+    out = []
+    for k in ks:
+        try:
+            out.append(walks.walks_to_perms(P, [[int(v) for v in w] for w in k['snode.ids']],
+                                            [bool(c) for c in k['circular']]))
+        except (ValueError, AssertionError, KeyError) as e:
+            sys.exit(f'error: --init {path}: walks do not fit this problem ({e}); same graph and target region?')
+    return out
 
 def rescale_depth(P, n, seed, batch=64):
     """multiply P.depth (in place) by sum(observed) / median(sum(expected)) over n uniformly random wirings,

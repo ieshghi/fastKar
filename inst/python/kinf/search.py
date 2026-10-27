@@ -14,10 +14,14 @@ import delta
 import optimize as opt
 
 def run(P, method='pt', chains=16, steps=20000, block=500, tmin=1.0, tmax=1000.0, seed=0, D=None,
-        nll_ref=0.0, trace=None, log=print, log_every=10, topk=1, history=None, history_every=0):
+        nll_ref=0.0, trace=None, log=print, log_every=10, topk=1, history=None, history_every=0,
+        init=None, init_random=0):
     """P: model.load_problem(...). Returns dict(b = best wiring (delta encoding), nll, perms (hard permutations
     {node: (CN,CN)}), summary, top). nll_ref is subtracted from every reported NLL (e.g. the truth NLL -> gaps).
     trace: open text file for the per-block curve (steps, best, current NLL per rung, all minus nll_ref).
+    init: warm start, a list of wirings (b arrays in the delta encoding, or hard permutation dicts {node: (CN,CN)},
+    e.g. from walks.walks_to_perms on a previous result); chain c starts from init[c % len(init)], except the last
+    init_random chains, which start from random wirings (a control). Validated against P.
     history, history_every > 0: open text file for the NLL of every chain every history_every proposals (and at
     step 0), with the temperature the chain had then: columns steps, chain, T, nll (minus nll_ref).
     topk > 1: each chain also keeps the 2*topk lowest-NLL states it visited (any rung), counting states whose NLLs
@@ -67,7 +71,13 @@ def run(P, method='pt', chains=16, steps=20000, block=500, tmin=1.0, tmax=1000.0
 
     key = jax.random.PRNGKey(seed)
     r0 = opt.random_perms(P, jax.random.fold_in(key, 999), C)
-    states = [D['init'](D['b_from_perms']({n: v[c] for n, v in r0.items()})) for c in range(C)]
+    b0 = [D['b_from_perms']({n: v[c] for n, v in r0.items()}) for c in range(C)]
+    if init:
+        bi = [check_b(P, D['b_from_perms'](w) if isinstance(w, dict) else w) for w in init]
+        n_init = max(C - init_random, 0)
+        b0 = [jnp.asarray(bi[c % len(bi)], dtype=b0[c].dtype) if c < n_init else b0[c] for c in range(C)]
+        log(f'warm start: {min(n_init, C)} chains from {len(bi)} given wirings, {C - min(n_init, C)} random')
+    states = [D['init'](b) for b in b0]
     bests = [(s['nll'], s['b']) for s in states]
     bufs = [buf_insert(jnp.full(K, jnp.inf), jnp.zeros((K,) + s['b'].shape, s['b'].dtype), s['nll'], s['b'])
             if K else () for s in states]
@@ -123,6 +133,23 @@ def run(P, method='pt', chains=16, steps=20000, block=500, tmin=1.0, tmax=1000.0
                 acc_rate_per_rung=list(acc_tot / (nb * block)), swap_rate=list(sw_acc / np.maximum(sw_try, 1)),
                 wall_s=wall, ms_per_proposal=wall / (nb * block * C) * 1e3)
     return dict(b=b, nll=nll, perms=perms, summary=summ, top=top)
+
+def check_b(P, b):
+    """b (delta encoding) as a numpy int array, or ValueError if it is not a wiring of P: one entry per row of
+    var_a, and each node's block a permutation of that node's right inner ends."""
+    b = np.asarray(b)
+    nodes = sorted(P.var_nodes)
+    cn = [len(P.var_nodes[n][0]) for n in nodes]
+    if b.ndim != 1 or len(b) != sum(cn):
+        raise ValueError(f'init wiring has shape {b.shape}; this problem needs {sum(cn)} entries '
+                         f'({len(nodes)} variable nodes): was it made for the same graph and target region?')
+    s = 0
+    for n, k in zip(nodes, cn):
+        want = np.sort(np.asarray(model.inner_end(1, P.var_nodes[n][1])))
+        if not np.array_equal(np.sort(b[s:s + k]), want):
+            raise ValueError(f'init wiring is not a permutation at node {n}: same graph and target region?')
+        s += k
+    return b.astype(np.int64)
 
 def topk_karyotypes(P, cands, k):
     """the k lowest-NLL entries of cands (dicts with nll, perms) that are distinct karyotypes; adds walks/circular."""

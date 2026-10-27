@@ -186,6 +186,11 @@ fit$summary   # best NLL, device, timing, acceptance / swap rates, depth correct
 fit$trace     # best NLL per block of proposals
 ```
 
+Coarse-to-fine: `infer_karyotype(..., pix.size = 2.5e5, init = fit_1mb)` warm-starts the chains from a previous
+run on the same graph and target region (its top-k karyotypes if it has them), or from a gWalk / `best_b.npy` /
+`gwalks.json`; `init_random = n` keeps n chains on random starts as a control. `history_every = n` records every
+chain's NLL every n proposals (`fit$history`) for convergence plots.
+
 `gg` must have node and junction copy numbers (`loosefix()` it first). With `truth =` (a gWalk on `gg`, for
 simulations) the summary also reports the NLL gap to the truth and whether it was recovered exactly.
 `rescale = TRUE` corrects the depth like `bestfit_search(rescale = TRUE)`, using random wirings as candidates.

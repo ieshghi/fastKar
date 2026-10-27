@@ -103,3 +103,32 @@ test_that('history_every records every chain and agrees with the per-block trace
         expect_equal(sort(h[steps == b]$nll), unname(tv), tolerance = 1e-5)
     }
 })
+
+test_that('init warm-starts chains from a previous (coarser) run or a gWalk, and rejects foreign wirings', {
+    skip_if_no_loosefix()
+    skip_if_not(kinf_available(), 'kinf Python not configured (install_kinf())')
+    data.table::setDTthreads(1)
+    x = kinf_toy(pix = 1e5, depth = 30)
+    coarse = infer_karyotype(x$gg, x$gm, depth = x$depth, pix.size = 1e5, target_region = x$ft, chains = 4,
+                             steps = 2000, block = 250, truth = x$truth, verbose = FALSE)
+    expect_true(isTRUE(coarse$summary$exact_recovery))
+    ## fine pass on the same graph + target: chains 1-3 start from the coarse best, chain 4 random
+    xf = kinf_toy(pix = 5e4, depth = 30)
+    fine = infer_karyotype(xf$gg, xf$gm, depth = xf$depth, pix.size = 5e4, target_region = xf$ft, chains = 4,
+                           steps = 250, block = 250, method = 'greedy', truth = xf$truth, init = coarse,
+                           init_random = 1, history_every = 250, verbose = FALSE)
+    h0 = fine$history[steps == 0][order(chain)]
+    expect_equal(h0$nll[1:3], rep(0, 3), tolerance = 1e-6)
+    expect_gt(h0$nll[4], 1)
+    expect_true(isTRUE(fine$summary$exact_recovery))
+    ## a gWalk on gg as init
+    g = infer_karyotype(xf$gg, xf$gm, depth = xf$depth, pix.size = 5e4, target_region = xf$ft, chains = 2,
+                        steps = 250, block = 250, method = 'greedy', truth = xf$truth, init = xf$truth,
+                        history_every = 250, verbose = FALSE)
+    expect_equal(g$history[steps == 0]$nll, c(0, 0), tolerance = 1e-6)
+    ## a wiring of another graph fails with a clear message
+    other = kinf_toy('ccle_pyrgo_local', k = 'circ', pix = NULL)
+    expect_error(infer_karyotype(xf$gg, xf$gm, depth = xf$depth, pix.size = 5e4, target_region = xf$ft,
+                                 chains = 2, steps = 250, block = 250, init = other$truth, verbose = FALSE),
+                 'do not fit this problem')
+})

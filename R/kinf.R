@@ -255,6 +255,7 @@ kinf_check = function(python = NULL, backend = c('local', 'slurm'), device = c('
                         wait = TRUE, gpu = NULL, cores = NULL, verbose = TRUE){
   odir = file.path(workdir, 'out')
   cmd = c(python, file.path(kinf_dir(), 'infer.py'), problem, odir)
+  args = Filter(Negate(is.null), args)
   for (nm in names(args)) cmd = c(cmd, paste0('--', nm), format(args[[nm]], scientific = FALSE))
   if (truth) cmd = c(cmd, '--truth')
   if (backend == 'local'){
@@ -365,6 +366,10 @@ kinf_check = function(python = NULL, backend = c('local', 'slurm'), device = c('
 #' @param history_every record the NLL of every chain every history_every proposals (and at step 0) for
 #'   convergence plots; returned as history (data.table steps, chain, T = the chain's temperature then, nll; minus
 #'   the truth NLL when truth is given). 0: off. The best-so-far curve is cummin over chains.
+#' @param init warm start (e.g. a fine-resolution run from a coarse one on the same graph and target region): a
+#'   previous infer_karyotype() result or kinf_job (its top-k karyotypes if it has them, else its best), a path to
+#'   a best_b.npy / gwalks.json / topk.json, or a gWalk on gg. Chains take these wirings in order (round robin).
+#' @param init_random with init: leave this many chains on random starts (a control).
 #' @param python kinf interpreter (default kinf_python()).
 #' @return list(gw = gWalk on gg, summary = list from summary.json, trace = data.table of the search curve
 #'   (best and per-rung NLL per block), workdir); with topk > 1 also kars (list of gWalks, best first) and nlls;
@@ -374,8 +379,8 @@ infer_karyotype = function(gg, hic, depth = NULL, pix.size = 1e6, target_region 
                            method = c('pt', 'greedy'), chains = 16, steps = 20000, block = 500, tmin = 1,
                            tmax = 1000, seed = 0, device = c('auto', 'gpu', 'cpu'), gpu = NULL, cores = NULL,
                            backend = c('local', 'slurm'), slurm = list(), wait = TRUE, workdir = NULL,
-                           truth = NULL, topk = 1, rescale = FALSE, history_every = 0, python = NULL,
-                           verbose = TRUE){
+                           truth = NULL, topk = 1, rescale = FALSE, history_every = 0, init = NULL,
+                           init_random = 0, python = NULL, verbose = TRUE){
   method = match.arg(method); device = match.arg(device); backend = match.arg(backend)
   if (purity != 1) stop('purity != 1 is not supported by the Python model yet')
   py = kinf_python(python)
@@ -407,10 +412,12 @@ infer_karyotype = function(gg, hic, depth = NULL, pix.size = 1e6, target_region 
   dir.create(pdir, recursive = TRUE, showWarnings = FALSE)
   prep_data_for_py(gg = gg, gm = hic, depth = depth, purity = purity, pix.size = pix.size,
                    target_region = target_region, write.to.folder = paste0(pdir, '/'), truth = truth)
+  init_file = .kinf_init_file(init, workdir)
   job = .kinf_launch(problem = pdir, workdir = workdir, python = py,
                      args = list(method = method, chains = chains, steps = steps, block = block, tmin = tmin,
                                  tmax = tmax, seed = seed, topk = topk, history = as.integer(history_every),
                                  rescale = if (isTRUE(rescale)) 256L else as.integer(rescale),
+                                 init = init_file, `init-random` = if (!is.null(init_file)) as.integer(init_random),
                                  device = if (backend == 'slurm' && device == 'auto') 'gpu' else device),
                      truth = !is.null(truth), backend = backend, slurm = slurm, wait = wait, gpu = gpu,
                      cores = cores, verbose = verbose)
@@ -473,6 +480,32 @@ kinf_collect = function(job){
 print.kinf_job = function(x, ...){
   cat('kinf job', x$job_id, '(', x$backend, ') in', x$workdir, '\n')
   invisible(x)
+}
+
+# warm-start file for infer.py --init, copied into workdir (visible to Slurm jobs): from a previous result /
+# kinf_job (topk.json if present, else gwalks.json), a .npy / .json path, or a gWalk (written as gwalks.json)
+.kinf_init_file = function(init, workdir){
+  if (is.null(init)) return(NULL)
+  if (inherits(init, 'gWalk')){
+    f = file.path(workdir, 'init_gwalks.json')
+    writeLines(jsonlite::toJSON(list(snode.ids = lapply(init$snode.id, as.integer), circular = as.logical(init$circular)),
+                                auto_unbox = FALSE), f)
+    return(f)
+  }
+  if (is.list(init) && !is.null(init$workdir)){
+    od = file.path(init$workdir, 'out')
+    src = c(file.path(od, 'topk.json'), file.path(od, 'gwalks.json'))
+    src = src[file.exists(src)]
+    if (!length(src)) stop('init: no gwalks.json in ', od)
+    init = src[1]
+  }
+  if (!is.character(init) || length(init) != 1 || !file.exists(init))
+    stop('init must be a previous result, a kinf_job, a gWalk, or an existing .npy / .json file')
+  ext = tools::file_ext(init)
+  if (!ext %in% c('npy', 'json')) stop('init file must be .npy or .json')
+  f = file.path(workdir, paste0('init.', ext))
+  if (normalizePath(init) != normalizePath(f, mustWork = FALSE)) file.copy(init, f, overwrite = TRUE)
+  f
 }
 
 #' Read a gwalks.json written by infer.py (signed snode ids + circular flags) as a gWalk on graph
