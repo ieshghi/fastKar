@@ -150,12 +150,80 @@ karyotypes rather than a point estimator — the same pipeline scales to both re
 
 ---
 
+## Karyotype inference (kinf)
+
+`bestfit_search` ranks randomly sampled karyotypes, which cannot reach the truth when the karyotype space is
+huge. `infer_karyotype` instead **searches** the wirings of the graph for the best fit to the Hi-C: an exact
+negative-binomial NLL with incremental updates per move, driven by parallel tempering, on a GPU (JAX). The Python
+code ships in `inst/python/kinf`; it runs in its own Python environment.
+
+### Install (once)
+
+```r
+library(fastKar)
+# NVIDIA GPU nodes (needs only the driver; ~5 GB). Put envdir on a filesystem the compute nodes see.
+install_kinf(envdir = '/shared/envs/fastkar_kinf', build = 'cuda12')
+# or CPU only (~1 GB, ~20x slower):
+install_kinf(build = 'cpu')
+kinf_check()   # JAX devices + a self test that must recover a known karyotype
+```
+
+`install_kinf()` downloads a standalone Python with [uv](https://github.com/astral-sh/uv) (it runs without
+environment modules, e.g. inside Slurm jobs), installs the pinned versions from
+`inst/python/kinf/requirements-*.txt`, and records the interpreter in
+`tools::R_user_dir('fastKar', 'config')/kinf.json`. Override with `options(fastKar.kinf.python = ...)` or the
+`FASTKAR_KINF_PYTHON` environment variable.
+
+### Run
+
+```r
+fit <- infer_karyotype(gg, hic = 'sample.mcool', pix.size = 1e5,   # or a gMatrix + depth =
+                       target_region = region, chains = 16, steps = 20000,
+                       topk = 5, rescale = TRUE)
+fit$gw        # best karyotype, a gWalk on gg
+fit$kars      # top-k distinct karyotypes visited (best first), fit$nlls their NLLs
+fit$summary   # best NLL, device, timing, acceptance / swap rates, depth correction
+fit$trace     # best NLL per block of proposals
+```
+
+Coarse-to-fine: `infer_karyotype(..., pix.size = 2.5e5, init = fit_1mb)` warm-starts the chains from a previous
+run on the same graph and target region (its top-k karyotypes if it has them), or from a gWalk / `best_b.npy` /
+`gwalks.json`; `init_random = n` keeps n chains on random starts as a control. `history_every = n` records every
+chain's NLL every n proposals (`fit$history`) for convergence plots.
+
+`gg` must have node and junction copy numbers (`loosefix()` it first). With `truth =` (a gWalk on `gg`, for
+simulations) the summary also reports the NLL gap to the truth and whether it was recovered exactly.
+`rescale = TRUE` corrects the depth like `bestfit_search(rescale = TRUE)`, using random wirings as candidates.
+
+### On a Slurm cluster
+
+```r
+install_kinf(envdir = '/shared/envs/fastkar_kinf', build = 'cuda12',
+             slurm = list(partition = 'gpu', gres = 'gpu:1', time = '2:00:00', account = 'mylab'))
+job <- infer_karyotype(gg, hic = 'sample.mcool', pix.size = 1e5, backend = 'slurm', wait = FALSE)
+fit <- kinf_collect(job)   # reports the state while pending/running, the log tail if it failed
+```
+
+With `wait = TRUE` (the default) the call blocks until the job finishes and returns the fit.
+
+### Setting it up with an AI agent
+
+The Claude Code skill [`.claude/skills/fastkar-kinf-install/SKILL.md`](.claude/skills/fastkar-kinf-install/SKILL.md)
+walks an agent through surveying a cluster (GPUs, partitions, shared filesystems, quota), choosing the
+`install_kinf()` arguments and checking the result. Claude Code finds it automatically when it runs inside a
+clone of this repository; otherwise point your agent at the file on GitHub.
+
+Convergence benchmark: `bench/kinf/` (small CCLE events with simulated truths; `run_kinf_bench.R`).
+
+---
+
 ## Where to go next
 
 * `R/graphstats.R` — sampling (`sample.gwalks`), karyotype hashing, walk-to-walk distances
 * `R/forward.R` — forward simulation (`forward_simulate`)
 * `R/comparisons.R` — likelihood and noise (`compmaps`, `make_noisymap`, `callloops`)
-* `R/backwards.R` — fitting against observed Hi-C (`bestfit_search`)
+* `R/backwards.R` — fitting against observed Hi-C (`bestfit_search`, `prep_data_for_py`)
+* `R/kinf.R`, `inst/python/kinf/` — karyotype inference by search (`install_kinf`, `infer_karyotype`)
 * `R/tests.R` — synthetic graph constructors (`make_threeway_repdup`, `gimme_bfb`, `makerepdup`)
 * `tests/testthat/` — regression and correctness tests
 * `bench/` — benchmark harness and history (drop real `gGraph` `.rds` files in `bench/graphs/`)
