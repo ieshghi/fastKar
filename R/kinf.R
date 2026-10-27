@@ -356,14 +356,21 @@ kinf_check = function(python = NULL, backend = c('local', 'slurm'), device = c('
 #' @param workdir folder for the exported problem (workdir/problem) and the search output (workdir/out). Default
 #'   a temp folder (local) or a new folder under the config's shared run folder (slurm).
 #' @param truth optional gWalk on gg (simulations): also scores it (gap to its NLL, exact recovery).
+#' @param topk also return the topk best distinct karyotypes visited by any chain (as bestfit_search(topk =)):
+#'   each chain keeps its 2*topk lowest-NLL states (NLLs equal to 1e-9 relative count once), merged over chains
+#'   and deduplicated as karyotypes.
+#' @param rescale as bestfit_search(rescale = TRUE): multiply depth by observed total / median expected total
+#'   over random wirings (the analogue of its sampled candidates) before the search. TRUE = 256 random wirings,
+#'   or give the number. The ratio and the depth used are in summary (depth_ratio, depth).
 #' @param python kinf interpreter (default kinf_python()).
 #' @return list(gw = gWalk on gg, summary = list from summary.json, trace = data.table of the search curve
-#'   (best and per-rung NLL per block), workdir); with backend = 'slurm', wait = FALSE a kinf_job handle.
+#'   (best and per-rung NLL per block), workdir); with topk > 1 also kars (list of gWalks, best first) and nlls;
+#'   with backend = 'slurm', wait = FALSE a kinf_job handle.
 infer_karyotype = function(gg, hic, depth = NULL, pix.size = 1e6, target_region = NULL, ploidy = 2, purity = 1,
                            method = c('pt', 'greedy'), chains = 16, steps = 20000, block = 500, tmin = 1,
                            tmax = 1000, seed = 0, device = c('auto', 'gpu', 'cpu'), gpu = NULL, cores = NULL,
                            backend = c('local', 'slurm'), slurm = list(), wait = TRUE, workdir = NULL,
-                           truth = NULL, python = NULL, verbose = TRUE){
+                           truth = NULL, topk = 1, rescale = FALSE, python = NULL, verbose = TRUE){
   method = match.arg(method); device = match.arg(device); backend = match.arg(backend)
   if (purity != 1) stop('purity != 1 is not supported by the Python model yet')
   py = kinf_python(python)
@@ -397,7 +404,9 @@ infer_karyotype = function(gg, hic, depth = NULL, pix.size = 1e6, target_region 
                    target_region = target_region, write.to.folder = paste0(pdir, '/'), truth = truth)
   job = .kinf_launch(problem = pdir, workdir = workdir, python = py,
                      args = list(method = method, chains = chains, steps = steps, block = block, tmin = tmin,
-                                 tmax = tmax, seed = seed, device = if (backend == 'slurm' && device == 'auto') 'gpu' else device),
+                                 tmax = tmax, seed = seed, topk = topk,
+                                 rescale = if (isTRUE(rescale)) 256L else as.integer(rescale),
+                                 device = if (backend == 'slurm' && device == 'auto') 'gpu' else device),
                      truth = !is.null(truth), backend = backend, slurm = slurm, wait = wait, gpu = gpu,
                      cores = cores, verbose = verbose)
   job$graph = gg
@@ -407,10 +416,25 @@ infer_karyotype = function(gg, hic, depth = NULL, pix.size = 1e6, target_region 
 
 .kinf_read_results = function(job){
   odir = file.path(job$workdir, 'out')
-  list(gw = read_kinf_gwalks(file.path(odir, 'gwalks.json'), job$graph),
-       summary = jsonlite::read_json(file.path(odir, 'summary.json'), simplifyVector = TRUE),
-       trace = data.table::fread(file.path(odir, 'trace.tsv')),
-       workdir = job$workdir)
+  out = list(gw = read_kinf_gwalks(file.path(odir, 'gwalks.json'), job$graph),
+             summary = jsonlite::read_json(file.path(odir, 'summary.json'), simplifyVector = TRUE),
+             trace = data.table::fread(file.path(odir, 'trace.tsv')),
+             workdir = job$workdir)
+  if (file.exists(file.path(odir, 'topk.json'))) out = c(out, read_kinf_topk(file.path(odir, 'topk.json'), job$graph))
+  out
+}
+
+#' Read a topk.json written by infer.py --topk: list(kars = gWalks on graph (or plain walk lists when graph is
+#' NULL), best first, nlls).
+read_kinf_topk = function(path, graph = NULL){
+  x = jsonlite::read_json(path, simplifyVector = FALSE)
+  kars = lapply(x, function(k){
+    snode.id = lapply(k$snode.ids, function(w) as.integer(unlist(w)))
+    circular = as.logical(unlist(k$circular))
+    if (is.null(graph)) list(snode.id = snode.id, circular = circular)
+    else gW(graph = graph, snode.id = snode.id, circular = circular)
+  })
+  list(kars = kars, nlls = vapply(x, function(k) as.numeric(k$nll), numeric(1)))
 }
 
 #' Collect a Slurm kinf job submitted with infer_karyotype(..., backend = 'slurm', wait = FALSE).

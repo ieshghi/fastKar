@@ -3,10 +3,11 @@
 Input: a problem folder written by R/prep_data_for_py.R (or from R, use infer_karyotype() in R/infer_karyotype.R,
 which writes the folder, calls this script and reads the result back as a gWalk).
 Output (OUT): gwalks.json (best karyotype: signed snode ids on the gGraph passed to prep_data_for_py, circular
-flags; read in R with read_kinf_gwalks()), summary.json, trace.tsv (best and per-rung NLL per block), best_b.npy.
+flags; read in R with read_kinf_gwalks()), summary.json, trace.tsv (best and per-rung NLL per block), best_b.npy;
+with --topk K > 1 also topk.json (the K best distinct karyotypes visited: list of {nll, snode.ids, circular}).
 
 Usage: python infer.py PROBLEM OUT [--method pt|greedy] [--chains 16] [--steps 20000] [--block 500]
-       [--tmin 1] [--tmax 1000] [--seed 0] [--device auto|gpu|cpu] [--truth]
+       [--tmin 1] [--tmax 1000] [--seed 0] [--device auto|gpu|cpu] [--truth] [--topk 1] [--rescale 0]
 Run with PYTHONPATH unset (env -u PYTHONPATH); entries from PYTHONPATH are dropped from sys.path here as well.
 """
 import os, sys
@@ -29,6 +30,11 @@ def parse():
     ap.add_argument('--seed', type=int, default=0)
     ap.add_argument('--device', default='auto', choices=['auto', 'gpu', 'cpu'],
                     help='auto: GPU if available, else CPU with a warning; gpu: fail without a GPU [auto]')
+    ap.add_argument('--topk', type=int, default=1,
+                    help='also write the K best distinct karyotypes visited by any chain to topk.json [1: off]')
+    ap.add_argument('--rescale', type=int, default=0, metavar='N',
+                    help='rescale depth by observed total / median expected total over N random wirings, as '
+                         'fastKar bestfit_search(rescale = TRUE) does over its sampled candidates [0: off]')
     ap.add_argument('--truth', action='store_true',
                     help='also score PROBLEM/truth_gwalks.json (simulations): NLL gap and exact recovery')
     return ap.parse_args()
@@ -53,6 +59,10 @@ def main():
     folder = a.problem.rstrip('/')
     P = model.load_problem(folder)
     log(f'problem {folder}: {P.ntile} tiles, {len(P.tc_uid)} tile copies, {len(P.var_nodes)} variable nodes')
+    depth_ratio = 1.0
+    if a.rescale > 0:
+        depth_ratio = rescale_depth(P, a.rescale, a.seed)
+        log(f'depth rescaled by {depth_ratio:.4g} (median over {a.rescale} random wirings): {P.depth:.4g}')
     nll_truth = None
     if a.truth:
         sn, circ = walks.read_gwalks(folder + '/truth_gwalks.json')
@@ -62,13 +72,21 @@ def main():
     os.makedirs(a.out, exist_ok=True)
     with open(os.path.join(a.out, 'trace.tsv'), 'w') as tr:
         res = search.run(P, method=a.method, chains=a.chains, steps=a.steps, block=a.block, tmin=a.tmin,
-                         tmax=a.tmax, seed=a.seed, nll_ref=nll_truth or 0.0, trace=tr, log=log)
+                         tmax=a.tmax, seed=a.seed, nll_ref=nll_truth or 0.0, trace=tr, log=log,
+                         topk=a.topk)
 
     wk, circular = walks.perms_to_walks(P, res['perms'])
     with open(os.path.join(a.out, 'gwalks.json'), 'w') as f:
         json.dump({'snode.ids': [[int(x) for x in w] for w in wk], 'circular': [bool(c) for c in circular]}, f)
     np.save(os.path.join(a.out, 'best_b.npy'), res['b'])
-    summ = dict(problem=os.path.abspath(folder), device=str(devs[0].platform), n_walks=len(wk),
+    if a.topk > 1:
+        top = search.topk_karyotypes(P, res['top'], a.topk)
+        with open(os.path.join(a.out, 'topk.json'), 'w') as f:
+            json.dump([{'nll': t['nll'], 'snode.ids': [[int(x) for x in w] for w in t['walks']],
+                        'circular': [bool(c) for c in t['circular']]} for t in top], f)
+        log(f'top {len(top)} karyotypes, NLL - best: ' + ' '.join(f"{t['nll'] - res['nll']:.3g}" for t in top))
+    summ = dict(problem=os.path.abspath(folder), device=str(devs[0].platform), depth=P.depth,
+                depth_ratio=depth_ratio, n_walks=len(wk),
                 n_circular=int(sum(circular)), **res['summary'])
     if nll_truth is not None:
         summ.update(nll_truth=nll_truth, gap_to_truth=res['nll'] - nll_truth,
@@ -76,6 +94,23 @@ def main():
     json.dump(summ, open(os.path.join(a.out, 'summary.json'), 'w'), indent=1)
     log('done: ' + json.dumps({k: v for k, v in summ.items() if k in
         ('best_nll', 'gap_to_truth', 'exact_recovery', 'n_walks', 'n_circular', 'wall_s', 'ms_per_proposal')}))
+
+def rescale_depth(P, n, seed, batch=64):
+    """multiply P.depth (in place) by sum(observed) / median(sum(expected)) over n uniformly random wirings,
+    both over the upper triangle of the tile map; returns the ratio. The expected map is linear in depth."""
+    import jax, numpy as np
+    import model, optimize as opt
+    if len(P.var_nodes) == 0:
+        n = 1
+    m = model.make_model(P)
+    tot = jax.jit(jax.vmap(lambda p: jax.numpy.sum(jax.numpy.triu(m.hard_expected_map(p)))))
+    r = opt.random_perms(P, jax.random.PRNGKey(seed + 7919), n)
+    totals = np.concatenate([np.asarray(tot({k: v[i:i + batch] for k, v in r.items()}) if r else
+                                        [float(np.sum(np.triu(np.asarray(m.hard_expected_map({})))))])
+                             for i in range(0, n, batch)])
+    ratio = float(np.sum(P.x_obs) / np.median(totals))
+    P.depth *= ratio
+    return ratio
 
 if __name__ == '__main__':
     main()

@@ -27,6 +27,8 @@ infer_karyotype(
   wait = TRUE,
   workdir = NULL,
   truth = NULL,
+  topk = 1,
+  rescale = FALSE,
   python = NULL,
   verbose = TRUE
 )
@@ -72,11 +74,20 @@ a temp folder (local) or a new folder under the config's shared run folder (slur
 
 \item{truth}{optional gWalk on gg (simulations): also scores it (gap to its NLL, exact recovery).}
 
+\item{topk}{also return the topk best distinct karyotypes visited by any chain (as bestfit_search(topk =)):
+each chain keeps its 2*topk lowest-NLL states (NLLs equal to 1e-9 relative count once), merged over chains
+and deduplicated as karyotypes.}
+
+\item{rescale}{as bestfit_search(rescale = TRUE): multiply depth by observed total / median expected total
+over random wirings (the analogue of its sampled candidates) before the search. TRUE = 256 random wirings,
+or give the number. The ratio and the depth used are in summary (depth_ratio, depth).}
+
 \item{python}{kinf interpreter (default kinf_python()).}
 }
 \value{
 list(gw = gWalk on gg, summary = list from summary.json, trace = data.table of the search curve
-(best and per-rung NLL per block), workdir); with backend = 'slurm', wait = FALSE a kinf_job handle.
+(best and per-rung NLL per block), workdir); with topk > 1 also kars (list of gWalks, best first) and nlls;
+with backend = 'slurm', wait = FALSE a kinf_job handle.
 }
 \description{
 Exports gg and the map with prep_data_for_py(), runs inst/python/kinf/infer.py (locally or as a Slurm job)
