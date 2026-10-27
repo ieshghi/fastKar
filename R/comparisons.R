@@ -237,18 +237,23 @@ call_gwalk_longreads = function(longreads, gwa, gwb, readL, depth){
 	return(list(called_gw = called_gw, loglikratio = loglikratio, sim_error_rate = simdata$error_rate, gwa_llr = simdata$gwa_ratios, gwb_llr = simdata$gwb_ratios))
 }
 
-longread_probdist = function(gwlist,readL,minsize=0,background=1e-10,use.nodes=NULL,mc.cores=1){
+longread_probdist = function(gwlist,readL,minsize=0,background=1e-10,use.nodes=NULL,mc.cores=1,obs_words=NULL){
 	if (is(gwlist,'gWalk')){gwlist = list(gwlist)}
 	reads_list = mclapply(gwlist,function(x){reads_fromwalk(x,readL,minsize=minsize,use.nodes=use.nodes)},mc.cores=mc.cores)
-	.probdist_from_reads(reads_list,background=background,mc.cores=mc.cores)
+	.probdist_from_reads(reads_list,background=background,mc.cores=mc.cores,obs_words=obs_words)
 }
 
 ## longread_probdist() given the reads_fromwalk() tables: smoothed word frequencies over the
 ## shared vocabulary. Words are looked up with match() rather than by name; "" and NA words
 ## never match a name, so they get count 0 exactly as the named lookup gives them.
-.probdist_from_reads = function(reads_list,background=1e-10,mc.cores=1){
+## obs_words (optional) are added to the vocabulary so that observed words absent from every walk
+## still get (background-smoothed) probability.
+.probdist_from_reads = function(reads_list,background=1e-10,mc.cores=1,obs_words=NULL){
 	wordlist = lapply(reads_list,function(x){x$words})
 	all_words = unique(unname(unlist(wordlist)))#do.call('union',lapply(reads_list,function(x){x$words}))
+	if (!is.null(obs_words)){
+		all_words = union(all_words,obs_words)
+	}
 	nomatch = is.na(all_words) | all_words == ''
 	mclapply(reads_list,function(x){
 			m = match(all_words,x$words)
@@ -258,6 +263,36 @@ longread_probdist = function(gwlist,readL,minsize=0,background=1e-10,use.nodes=N
 			cx[is.na(cx)] = 0
 			return((cx + background)/(sum(cx) + background * length(all_words)))
 		   },mc.cores=mc.cores)
+}
+
+## Read-length-mixture version of longread_probdist(): readL_vec is binned in log space, longread_probdist()
+## is evaluated at each non-empty bin's mean read length, and the per-walk distributions are averaged
+## with weights = fraction of reads in the bin.
+readdist_probdist = function(gwlist,readL_vec,bins=10,minsize=0,background=1e-10,use.nodes=NULL,mc.cores=1,obs_words=NULL){
+	if (is(gwlist,'gWalk')){gwlist = list(gwlist)}
+	log.rl = log(readL_vec)
+	log.rl.bins = cut(log.rl, breaks = bins, labels = FALSE)
+	bin.ids = sort(unique(log.rl.bins)) #only bins that actually contain reads
+	bins.w = as.numeric(table(factor(log.rl.bins,levels=bin.ids))) / length(log.rl)
+	bins.avg.rl = as.numeric(tapply(readL_vec, factor(log.rl.bins,levels=bin.ids), mean))
+	bins.lrpdist = lapply(seq_along(bin.ids),function(i){
+		longread_probdist(gwlist,round(bins.avg.rl[i]),minsize=minsize,background=background,use.nodes=use.nodes,mc.cores=mc.cores,obs_words=obs_words)
+	})
+	# combine probs across bins, scaled by frac of reads per bin, and adding zero prob for words not seen in a given bin
+	prob_list = lapply(seq_along(gwlist),function(x){
+		wtd.ps = lapply(seq_along(bin.ids),function(i){
+			return(bins.lrpdist[[i]][[x]]*bins.w[i])
+		})
+		all.words = unique(names(unlist(wtd.ps)))
+		sum.ps = Reduce("+", lapply(wtd.ps, function(v){
+			out = v[all.words]
+			out[is.na(out)] = 0
+			names(out) = all.words
+			out
+		}))
+		return(sum.ps)
+	})
+	return(prob_list)
 }
 
 liktest_separable_lr = function(gwa,gwb,readL,depth=1,nsamp = 20,mc.cores=1,background=1e-10,use.nodes=NULL,return.kl = F,return.all=F){
