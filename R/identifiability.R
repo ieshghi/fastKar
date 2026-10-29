@@ -234,6 +234,9 @@ sample_local_candidates <- function(ctx, n_neighbors = 99, n_walkers = 200, n_sw
 ## binomial likelihood summed over pixels, vectorised over maps. Each pixel is weighted by its area
 ## width_i * width_j / pix.size^2 (as compdats() does): the tiles are cut at node boundaries, and a sliver
 ## tile should not count as much as a full pixel.
+## On allelic graphs the h1/h2 copies of a node share coordinates, so the tiling has one tile per haplotype
+## at each locus. The observed gMatrix sums them into one bin (Hi-C can't see haplotype), so candidate
+## tiles are summed onto the same bins before scoring (.tiles_to_bins()).
 local_hic_nll_matrix <- function(kars, ctx, n_obs = 100, depth = 10, theta = 2) {
     true_expected = forward_simulate(kars[[1]], target_region = ctx$target_region,
                                      pix.size = ctx$pix.size, depth = depth)
@@ -246,9 +249,13 @@ local_hic_nll_matrix <- function(kars, ctx, n_obs = 100, depth = 10, theta = 2) 
     X = matrix(X, nrow = nrow(template))
 
     prepped = prep_for_sim(kars[[1]], ctx$target_region, ctx$pix.size)
+    bin = .tiles_to_bins(prepped$tiled.target, gr)
     Y = vapply(kars, function(gw) {
         s = simulate_walks(gw, prepped$tiled.target, prepped$widthdt,
                            if.sum = TRUE, depth = depth / 2, gm.out = FALSE)$dat
+        if (!is.null(bin)) {
+            s = s[, .(i = pmin(bin[i], bin[j]), j = pmax(bin[i], bin[j]), value)][, .(value = sum(value)), by = .(i, j)]
+        }
         s = s[, .(i, j, value)][template, on = c('i', 'j')]
         s[is.na(value), value := 0]
         s[order(id)]$value
@@ -264,6 +271,20 @@ local_hic_nll_matrix <- function(kars, ctx, n_obs = 100, depth = 10, theta = 2) 
         out[, k] = -colSums(lp * weight[nz], na.rm = TRUE)
     }
     out
+}
+
+## Bin index in gr (the observed gMatrix bins) of every tile of a prep_for_sim() tiling, or NULL when the
+## tiles already are the bins (no two tiles share coordinates). Tiles must match bins exactly: h1/h2 nodes
+## with different boundaries would cut tiles that the gMatrix splits by copying values, so stop instead.
+.tiles_to_bins <- function(tiled.target, gr) {
+    if (nrow(tiled.target) == length(gr)) return(NULL)
+    key = function(s, a, b) paste(as.character(s), a, b)
+    bin = match(key(tiled.target$seqnames, tiled.target$start, tiled.target$end),
+                key(GenomicRanges::seqnames(gr), GenomicRanges::start(gr), GenomicRanges::end(gr)))
+    if (anyNA(bin)) {
+        stop('tiles overlap without matching coordinates (do h1/h2 nodes have different boundaries?)')
+    }
+    bin
 }
 
 ## Long-read NLL of n_obs read sets drawn from kars[[1]] (the truth) under
