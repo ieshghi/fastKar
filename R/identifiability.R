@@ -26,7 +26,8 @@ identifiability_context <- function(graph,
     if (!is.null(wholegenome)) {
         footprint = footprint %&% wholegenome
     }
-    ft0 = streduce(footprint)
+    ## the graph's chromosome lengths, so the buffer is not cut on the right (see graph_seqlengths())
+    ft0 = streduce(graph_seqlengths(footprint, graph))
     if (!is.numeric(footprint_buffer_fraction) || length(footprint_buffer_fraction) != 1 ||
         !is.finite(footprint_buffer_fraction) || footprint_buffer_fraction < 0) {
         stop('footprint_buffer_fraction must be a non-negative finite scalar')

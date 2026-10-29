@@ -1001,3 +1001,19 @@ paste_loose_ends_eaglec = function(gg, calls, region = NULL, tol = 1e4, return_a
 }
 
 
+
+## `gr` with the chromosome lengths of graph `gg`, so that padding it (gr + x, then streduce) stops at the
+## chromosome ends. parse.gr() takes them from DEFAULT_GENOME / DEFAULT_BSGENOME, and without either it ends
+## each chromosome at gr's own last base, which cuts any padding on the right. Chromosomes the graph has no
+## length for get its last node end; chromosomes not in the graph are left as they are.
+graph_seqlengths = function(gr, gg){
+	ngr = gg$nodes$gr
+	sl = GenomeInfoDb::seqlengths(ngr)
+	nend = tapply(end(ngr), as.character(seqnames(ngr)), max)
+	sl[is.na(sl)] = nend[names(sl)[is.na(sl)]]
+	lv = intersect(GenomeInfoDb::seqlevels(gr), names(sl)[!is.na(sl)])
+	s = GenomeInfoDb::seqlengths(gr)
+	s[lv] = sl[lv]
+	GenomeInfoDb::seqlengths(gr) = s
+	gr
+}

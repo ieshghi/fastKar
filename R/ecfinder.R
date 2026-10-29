@@ -15,8 +15,12 @@ fastKar_ecfinder = function(gg,ft,hic.res,true_hic_path,ec_fraction_threshold = 
 	# return_all = TRUE: also return the graph, hypotheses and observed/simulated maps (element 'hyp'), e.g. for figures
 	# sep_D_min: a Hi-C call (ecDNA or CI) needs the simulated ecDNA and HSR score distributions to be separated, KS p < 0.01
 	# and KS D >= sep_D_min (the p-value alone passes heavy overlap at 100 samples per side, e.g. D = 0.5); otherwise 'None'
-	wholegenome = si2gr(hg_seqlengths(chr=FALSE)) %Q% (seqnames %in% c(1:22,'X','Y'))
-	if (is(ft,'character')){ft = streduce(parse.gr(ft))}
+	# chromosome lengths from the graph, not DEFAULT_GENOME / DEFAULT_BSGENOME (see graph_seqlengths())
+	sl = GenomeInfoDb::seqlengths(graph_seqlengths(gg$nodes$gr, gg))
+	sl = sl[grepl('^(chr)?([0-9]+|X|Y)$', names(sl)) & !is.na(sl)]
+	wholegenome = GRanges(names(sl), IRanges(1, sl))
+	if (is(ft,'character')){ft = parse.gr(ft)}
+	ft = streduce(graph_seqlengths(ft, gg))
 	ft_context = streduce(ft + sum(width(ft))/10) #add 10% to the footprint for context
 	# score_region: Hi-C window to score (and plot) instead of the footprint + 10%, e.g. a few Mb around the amplified
 	# gene of a large multi-chromosome event, so bins are finer; hypotheses are still sampled on the whole footprint
@@ -223,7 +227,7 @@ sep_stats = function(ec,hsr){
 }
 
 find_circles = function(gg,ft,N,context.padding = 1e3,verbose=F,mc.cores=1){
-	if (is(ft,'character')){ft = streduce(parse.gr(ft))}
+	if (is(ft,'character')){ft = streduce(graph_seqlengths(parse.gr(ft), gg))}
 	amplicon_context_nodes = (gg$nodes$gr %&% streduce(ft + context.padding))$node.id %>% unique
 	freeze.nodes = gg$nodes$dt[!(node.id %in% amplicon_context_nodes)]$node.id #we don't want to freeze nodes directly adjacent to the amplicon
 	if(verbose){message('Sampling circular walks from graph')}
