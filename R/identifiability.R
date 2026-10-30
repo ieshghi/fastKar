@@ -236,7 +236,8 @@ sample_local_candidates <- function(ctx, n_neighbors = 99, n_walkers = 200, n_sw
 ## tile should not count as much as a full pixel.
 ## On allelic graphs the h1/h2 copies of a node share coordinates, so the tiling has one tile per haplotype
 ## at each locus. The observed gMatrix sums them into one bin (Hi-C can't see haplotype), so candidate
-## tiles are summed onto the same bins before scoring (.tiles_to_bins()).
+## tiles are summed onto the same bins before scoring (.tiles_to_bins()); simulate_walks() has already
+## doubled the h1-h2 pixels that land on a bin's diagonal (double_samelocus_pixels()).
 local_hic_nll_matrix <- function(kars, ctx, n_obs = 100, depth = 10, theta = 2) {
     true_expected = forward_simulate(kars[[1]], target_region = ctx$target_region,
                                      pix.size = ctx$pix.size, depth = depth)

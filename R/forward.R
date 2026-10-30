@@ -122,6 +122,26 @@ prep_for_sim = function(walks,target_region=NULL,pix.size=1e5,if.comps=F){
     return(list(tiled.target=tiled.target,widthdt=widthdt))
 }
 
+#' Double the pixels between two distinct tiles at the same locus (in place)
+#'
+#' On allelic graphs the h1/h2 copies of a node share coordinates, so the tiling has one tile per haplotype
+#' at each locus. The kernel stores contacts between tiles p != q once, on the upper-triangle pixel (p, q),
+#' and contacts within one tile on (p, p) with both orders counted. When p and q are summed into one bin
+#' (gM() disjoining, or .tiles_to_bins()), that bin's diagonal needs (p, q) twice, as (p, q) and (q, p).
+#' Graphs without shared tile coordinates are left untouched.
+#'
+#' @param dat data.table with columns i, j (tile indices) and value, modified by reference
+#' @param tiled.target tiling from prep_for_sim()
+#' @return dat, invisibly
+double_samelocus_pixels <- function(dat, tiled.target){
+    key = paste(as.character(tiled.target$seqnames), tiled.target$start, tiled.target$end)
+    if (!anyDuplicated(key)) return(invisible(dat))
+    locus = match(key, key)
+    idx = which(dat$i != dat$j & locus[dat$i] == locus[dat$j])
+    if (length(idx)) set(dat, i = idx, j = 'value', value = 2 * dat$value[idx])
+    invisible(dat)
+}
+
 #' Downstream of prep_for_sim, calculate Hi-C data in reference coordinates given sets of walks on a graph and a tiled target region
 #' 
 #' @param walks either a gGnome::gWalk or a list containing objects "graph" (a gGnome gGraph), "snode.id" (a list of arrays of node.ids inside "graph" in their walk order), and "circular" (an array of booleans indicating the circularity of the walks)
@@ -175,6 +195,7 @@ simulate_walks <- function(walks,tiled.target,widthdt,if.comps=F,mc.cores=1,if.s
         if (interchr){
             setattr(total.counts,'sorted','id') # calculate_interchrom() returned a table keyed by id
         }
+        double_samelocus_pixels(total.counts, tiled.target)
         if (gm.out){
             return(gM(gr = dt2gr(tiled.target),dat=total.counts))
         } else{
@@ -189,6 +210,7 @@ simulate_walks <- function(walks,tiled.target,widthdt,if.comps=F,mc.cores=1,if.s
         scaled_out = lapply(seq_along(walk.cn),function(ii){
             x = data.table::copy(target.dat)
             set(x,j='value',value=depth*(walk.cn[ii]*walk_acc(ii, 1)))
+            double_samelocus_pixels(x, tiled.target)
             if (gm.out){
                 return(gM(gr=target.gr,dat=x))
             } else{
