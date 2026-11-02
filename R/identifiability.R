@@ -161,7 +161,10 @@ identifiability_context <- function(graph,
 ## edit_mode = 'fragment', else walks stripped to footprint nodes), each in a
 ## canonical orientation, sorted and hashed. Equal signatures imply edit
 ## distance 0, so candidates sharing one would tie on every assay.
-.local_footprint_signature <- function(walk, ctx) {
+## With locus (from .haploid_locus()), node ids are mapped to loci after the
+## split, so karyotypes differing only in h1/h2 labels on allelic graphs share
+## a (haploid) signature.
+.local_footprint_signature <- function(walk, ctx, locus = NULL) {
     ids = ctx$graph$nodes$dt$node.id
     max_id = max(abs(ids))
     penalty = numeric(max_id)
@@ -177,10 +180,22 @@ identifiability_context <- function(graph,
     } else {
         pieces = lapply(s$nodelist, function(x) x[penalty[abs(x)] != 0])
     }
+    if (!is.null(locus)) pieces = lapply(pieces, function(v) sign(v) * locus[abs(v)])
     pieces = vapply(pieces[lengths(pieces) > 0], function(v) {
         min(paste(v, collapse = ','), paste(-rev(v), collapse = ','))
     }, character(1))
     digest::digest(sort(pieces), algo = 'xxhash64')
+}
+
+## Haploid locus of each node id (indexed by node id): nodes with the same
+## coordinates (the h1/h2 copies of a locus on allelic graphs) share a locus.
+## On non-allelic graphs every node is its own locus.
+.haploid_locus <- function(graph) {
+    nd = graph$nodes$dt
+    loc = paste(nd$seqnames, nd$start, nd$end)
+    out = integer(max(abs(nd$node.id)))
+    out[abs(nd$node.id)] = match(loc, unique(loc))
+    out
 }
 
 ## A random truth plus up to n_neighbors karyotypes near it. The truth is a
@@ -191,7 +206,9 @@ identifiability_context <- function(graph,
 ## identical inside the footprint (same .local_footprint_signature()), and a
 ## random n_neighbors of the rest are kept. Events with few swappable nodes give
 ## fewer candidates: then every distinct local karyotype is compared.
-## kars[[1]] is the truth; swaps is the fewest swaps at which each was reached.
+## kars[[1]] is the truth; swaps is the fewest swaps at which each was reached;
+## hap is each karyotype's haploid signature (h1/h2 labels dropped), used to
+## collapse label-only differences after scoring (.local_pick_summary()).
 sample_local_candidates <- function(ctx, n_neighbors = 99, n_walkers = 200, n_swaps = 3,
                                     mc.cores = 1) {
     wiring = gg.to.wiring(ctx$graph)
@@ -202,7 +219,7 @@ sample_local_candidates <- function(ctx, n_neighbors = 99, n_walkers = 200, n_sw
     truth = as_gw(truth_raw)
     frozen = setdiff(unique(w$n), ctx$use.nodes)
     if (!nrow(w[cn > 1 & !(n %in% frozen)])) {
-        return(list(kars = list(truth), edit = 0, swaps = 0L))
+        return(list(kars = list(truth), edit = 0, swaps = 0L, hap = 'truth'))
     }
     walks = .mclapply_strict(seq_len(n_walkers), function(i) {
         local.sampling(ctx$graph, nsteps = n_swaps + 1, nwalk = 1, frozen.nodes = frozen,
@@ -224,8 +241,11 @@ sample_local_candidates <- function(ctx, n_neighbors = 99, n_walkers = 200, n_sw
     sig = vapply(stats, `[[`, character(1), 'sig')
     keep = which(edit > 0 & !duplicated(sig))
     keep = keep[sample.int(length(keep), min(length(keep), n_neighbors))]
+    locus = .haploid_locus(ctx$graph)
+    hap = vapply(c(list(truth_raw), walks[keep]), .local_footprint_signature, character(1),
+                 ctx = ctx, locus = locus)
     list(kars = c(list(truth), lapply(walks[keep], as_gw)),
-         edit = c(0, edit[keep]), swaps = c(0L, swaps[keep]))
+         edit = c(0, edit[keep]), swaps = c(0L, swaps[keep]), hap = hap)
 }
 
 ## Hi-C NLL of n_obs noisy maps of kars[[1]] (the truth) under every candidate:
@@ -322,8 +342,16 @@ local_longread_nll_matrix <- function(kars, ctx, readL, n_obs = 100, depth = 10,
 
 ## Per observation: the truth's (column 1) NLL rank, the number of candidates
 ## tied for the best NLL, and p_pick = P(MLE = truth) with ties broken
-## uniformly (1/k if the truth ties k-way for best, else 0).
-.local_pick_summary <- function(nll, tol = 1e-8) {
+## uniformly (1/k if the truth ties k-way for best, else 0). With class (one
+## label per column, e.g. haploid signatures), candidates of one class are
+## first collapsed into one solution scored by its best member's NLL, so ranks,
+## ties and p_pick count solutions (the truth's class first).
+.local_pick_summary <- function(nll, tol = 1e-8, class = NULL) {
+    if (!is.null(class)) {
+        cl = factor(class, levels = unique(class))
+        nll = do.call(cbind, lapply(split(seq_len(ncol(nll)), cl), function(j)
+            apply(nll[, j, drop = FALSE], 1, min)))
+    }
     rbindlist(lapply(seq_len(nrow(nll)), function(m) {
         x = nll[m, ]
         best = x <= min(x) + tol * max(abs(min(x)), 1)
@@ -381,15 +409,16 @@ run_graph_local_identifiability <- function(graph,
     }
 
     picks = rbindlist(lapply(names(nll), function(a) {
-        dt = .local_pick_summary(nll[[a]])
+        dt = .local_pick_summary(nll[[a]], class = cand$hap)
         dt[, `:=`(modality = sub('_.*', '', a),
                   readL = if (a == 'hic') NA_real_ else as.numeric(sub('.*_', '', a)),
                   n_reads = if (a == 'hic') NA_integer_ else attr(nll[[a]], 'n_reads'))]
         dt
     }), fill = TRUE)
-    ## Only one karyotype (inside the footprint) is possible, so every assay
-    ## finds the truth: one row per assay with p_pick = 1.
-    unique_walk = length(cand$kars) == 1
+    ## Only one haploid karyotype (inside the footprint) is possible, so every
+    ## assay finds the truth: one row per assay with p_pick = 1.
+    n_hap = uniqueN(cand$hap)
+    unique_walk = n_hap == 1
     if (unique_walk) {
         picks = data.table(obs_id = NA_integer_, truth_rank = 1L, n_best = 1L, p_pick = 1,
                            modality = c(if ('hic' %in% modalities) 'hic',
@@ -398,10 +427,10 @@ run_graph_local_identifiability <- function(graph,
                                      if ('longread' %in% modalities) longread_lengths),
                            n_reads = NA_integer_)
     }
-    meta = data.table(n_cand = length(cand$kars), unique_walk = unique_walk,
+    meta = data.table(n_cand = length(cand$kars), n_hap = n_hap, unique_walk = unique_walk,
                       event_size = ctx$event_size, target_width = ctx$target_width)
     if (!is.null(event)) meta = cbind(as.data.table(event), meta)
     if (nrow(picks)) picks = cbind(meta[rep(1L, nrow(picks))], picks)
     .identifiability_log(label, 'done')
-    list(picks = picks, meta = meta, edit = cand$edit, swaps = cand$swaps, nll = nll)
+    list(picks = picks, meta = meta, edit = cand$edit, swaps = cand$swaps, hap = cand$hap, nll = nll)
 }
