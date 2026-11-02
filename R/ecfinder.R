@@ -1,4 +1,4 @@
-fastKar_ecfinder = function(gg,ft,hic.res,true_hic_path,ec_fraction_threshold = 0.6,n_sample=100,n_ec = 10,n_circle_samples=1000,n_hsr_samples=5000,figure_path = NULL,mc.cores=1,return_all=F,purity=1,rescale=F,score_region=NULL,seed=NULL,depth=NULL,sep_D_min=0.95,res_ladder=c(5e3,1e4,2.5e4,5e4,1e5,2.5e5,5e5,1e6)){
+fastKar_ecfinder = function(gg,ft,hic.res,true_hic_path,ec_fraction_threshold = 0.6,n_sample=100,n_ec = 10,n_circle_samples=1000,n_hsr_samples=5000,figure_path = NULL,mc.cores=1,return_all=F,purity=1,rescale=F,score_region=NULL,seed=NULL,depth=NULL,sep_D_min=0.9,res_ladder=c(5e3,1e4,2.5e4,5e4,1e5,2.5e5,5e5,1e6),keep.acen=FALSE,centromeres=NULL){
 	library(ggforce)
 	# true_hic_path = NULL: no Hi-C. Only asks whether the graph allows ecDNA and how separated the simulated ecDNA and HSR
 	# score distributions are (sep_D, sep_margin), at each Hi-C depth in 'depth' (required; X coverage as from
@@ -14,7 +14,10 @@ fastKar_ecfinder = function(gg,ft,hic.res,true_hic_path,ec_fraction_threshold = 
 	}
 	# return_all = TRUE: also return the graph, hypotheses and observed/simulated maps (element 'hyp'), e.g. for figures
 	# sep_D_min: a Hi-C call (ecDNA or CI) needs the simulated ecDNA and HSR score distributions to be separated, KS p < 0.01
-	# and KS D >= sep_D_min (the p-value alone passes heavy overlap at 100 samples per side, e.g. D = 0.5); otherwise 'None'
+	# and KS D > sep_D_min (the p-value alone passes heavy overlap at 100 samples per side, e.g. D = 0.5); otherwise 'None'.
+	# 0.9 since 2026-11-02 (user; was >= 0.95): COLO320-HSR with the contig fold-back, D 0.906, observed at the HSR mode
+	# keep.acen / centromeres: passed to squeeze(); by default HSR hypotheses must carry the amplicon on a centric walk,
+	# and an event with no such karyotype is called 'None' ('No centric HSR solutions')
 	# chromosome lengths from the graph, not DEFAULT_GENOME / DEFAULT_BSGENOME (see graph_seqlengths())
 	sl = GenomeInfoDb::seqlengths(graph_seqlengths(gg$nodes$gr, gg))
 	sl = sl[grepl('^(chr)?([0-9]+|X|Y)$', names(sl)) & !is.na(sl)]
@@ -41,7 +44,12 @@ fastKar_ecfinder = function(gg,ft,hic.res,true_hic_path,ec_fraction_threshold = 
 		if (return_all){out$hyp = list(gg=gg,ft=ft,ecdna_candidates=ecdna_all,ecdna_circ=ecdna_circ)}
 		return(out)
 	}
-	hsr_solns = squeeze(gg=gg,ft=ft,N=n_hsr_samples,k_return=n_ec,verbose = F,mc.cores=mc.cores) #karyotypes sampled to pick the HSR solutions from
+	hsr_solns = squeeze(gg=gg,ft=ft,N=n_hsr_samples,k_return=n_ec,verbose = F,mc.cores=mc.cores,keep.acen=keep.acen,centromeres=centromeres) #karyotypes sampled to pick the HSR solutions from
+	if (!length(hsr_solns)){
+		out = list(call='None', reason='No centric HSR solutions', max_ecdna_circ=max(c(0,ecdna_circ),na.rm=TRUE))
+		if (return_all){out$hyp = list(gg=gg,ft=ft,ecdna_candidates=ecdna_all,ecdna_circ=ecdna_circ)}
+		return(out)
+	}
 	n_ec = length(ecdna_solns)
 	n_hsr = length(hsr_solns)
 	random_walks = sample.gwalks(gg,n_sample,mc.cores=mc.cores,verbose = F)
@@ -206,7 +214,7 @@ fastKar_ecfinder = function(gg,ft,hic.res,true_hic_path,ec_fraction_threshold = 
 	circ_cor = cor(dt_r$score,dt_r$circle)
 	ec_hsr_sep = ks.test(dt[type=='HSR']$score,dt[type=='ecDNA']$score)$p.value
 	ss = sep_stats(dt[type=='ecDNA']$score,dt[type=='HSR']$score)
-	separated = ec_hsr_sep < 1e-2 & ss$sep_D >= sep_D_min
+	separated = ec_hsr_sep < 1e-2 & ss$sep_D > sep_D_min
 	call = if (separated & true_llr > ec_min) 'ecDNA' else if (separated & true_llr < hsr_max) 'CI' else 'None'
 	out = list(call=call,sep_pval = ec_hsr_sep,sep_D=ss$sep_D,sep_D_min=sep_D_min,sep_margin=ss$sep_margin,max_ecdna_circ=max(ecdna_circ,na.rm=TRUE),circ_cor = circ_cor,ec_score_true = true_llr,score_dt=dt,sum_ratio=sum_ratio,depth_ratio=ratio,n_ec=n_ec,n_hsr=n_hsr,leave_out=leave_out)
 	if (return_all){
@@ -358,13 +366,31 @@ amp.entropy.raw = function(kar,amp.nodes){
 	-sum(ampfrac*log(ampfrac))
 }
 
-squeeze = function(gg,ft,N,k_return=1,verbose=F,mc.cores=1){
+# HSR hypotheses: the k_return sampled karyotypes with the lowest amplicon entropy (amplicon on few walks), non-amplicon
+# nodes frozen to the default wiring; circular walks touching the amplicon are embedded into linear ones (embedloops).
+# keep.acen = FALSE (default; user, 2026-11-02): only karyotypes whose amplicon-heaviest walk (copy-weighted amplicon bp)
+# carries a centromere are eligible, since an acentric integrated array would be lost at division (on COLO320-HSR the
+# best-fit unrestricted HSR put 68% of the amplicon on an acentric palindrome). centromeres: GRanges, default
+# fastKar_centromeres(gg). No eligible karyotype: warning and an empty list.
+squeeze = function(gg,ft,N,k_return=1,verbose=F,mc.cores=1,keep.acen=FALSE,centromeres=NULL){
 	amplicon_nodes = (gg$nodes$gr %&% ft)$node.id %>% unique 
 	amplicon_context_nodes = (gg$nodes$gr %&% streduce(ft + 1e3))$node.id %>% unique 
 	freeze.nodes = gg$nodes$dt[!(node.id %in% amplicon_context_nodes)]$node.id #we don't want to freeze nodes directly adjacent to the amplicon, hence ft + 1e3
 	if (verbose){message('Sampling walks from graph')}
 	# raw karyotypes: gWalks for all N cost ~10x the memory and ~6x the time (NCIH-2170, N = 1000), and only k_return are kept
 	kars = sample.gwalks(gg,N,frozen.nodes = freeze.nodes,verbose=F,mc.cores=mc.cores,return.gw=F)
+	if (!keep.acen){
+		if (is.null(centromeres)){centromeres = fastKar_centromeres(gg)}
+		cen_nodes = unique((gg$nodes$gr %&% centromeres)$node.id)
+		node_width = as.numeric(width(gg$nodes$gr))
+		centric = vapply(kars,function(k){amp_walk_centric(k,amplicon_nodes,cen_nodes,node_width)},logical(1))
+		if (verbose){message(sum(centric),' of ',length(kars),' karyotypes have a centric amplicon walk')}
+		if (!any(centric)){
+			warning('squeeze: none of ',length(kars),' sampled karyotypes has its amplicon on a centric walk')
+			return(list())
+		}
+		kars = kars[centric]
+	}
 	if (verbose){message('Scoring walks')}
 	entropies = unlist(lapply(kars,function(k){amp.entropy.raw(k,amplicon_nodes)}))
 	top_walks = lapply(kars[head(order(entropies),k_return)],function(k){gW(graph=gg,snode.id=k$snode.id,circular=k$circular)})
@@ -377,6 +403,36 @@ squeeze = function(gg,ft,N,k_return=1,verbose=F,mc.cores=1){
 				 return(gw)})
 			 }else{gw}
 			 },mc.cores=mc.cores)
+}
+
+# TRUE if the walk of a raw karyotype (list(snode.id, circular), as sample.gwalks(return.gw = FALSE) gives it) that carries
+# the most amplicon bp (copy-weighted: a node traversed twice counts twice) visits a centromere node. Ties: the first walk.
+amp_walk_centric = function(kar,amp_nodes,cen_nodes,node_width){
+	nodes = abs(unlist(kar$snode.id))
+	walk = rep(seq_along(kar$snode.id),base::lengths(kar$snode.id))
+	in_amp = nodes %in% amp_nodes
+	if (!any(in_amp)){return(FALSE)}
+	amp_bp = vapply(split(node_width[nodes[in_amp]],factor(walk[in_amp],levels=seq_along(kar$snode.id))),sum,numeric(1))
+	any(nodes[walk == which.max(amp_bp)] %in% cen_nodes)
+}
+
+# Centromeres (UCSC cytoband acen bands, inst/extdata/centromeres_<build>.tsv) as GRanges named like gg's chromosomes
+# ('chr8' or '8'). build: 'hg19' or 'hg38'; NULL infers it from gg's chr1 length (graph_seqlengths(); JaBbA rounds
+# lengths to kb, so +- 1e4), and errors if chr1 matches neither.
+fastKar_centromeres = function(gg,build=NULL){
+	sl = GenomeInfoDb::seqlengths(graph_seqlengths(gg$nodes$gr,gg))
+	chr1 = sl[names(sl) %in% c('1','chr1')]
+	if (is.null(build)){
+		ref = c(hg19 = 249250621, hg38 = 248956422)
+		hit = names(ref)[length(chr1) == 1 & !is.na(chr1) & abs(ref - chr1[1]) <= 1e4]
+		if (length(hit) != 1){stop('fastKar_centromeres: cannot tell hg19 from hg38 by chr1 length (', paste(chr1, collapse = ','), '); pass build or centromeres')}
+		build = hit
+	}
+	f = system.file('extdata',paste0('centromeres_',build,'.tsv'),package='fastKar')
+	if (!nzchar(f)){stop('fastKar_centromeres: no centromere table for build ', build)}
+	d = data.table::fread(f,skip='seqnames')
+	if (any(grepl('^chr',names(sl)))){d[, seqnames := paste0('chr',seqnames)]}
+	GRanges(d$seqnames,IRanges(d$start,d$end))
 }
 
 amp_circular_fraction = function(gw,ft){
@@ -416,6 +472,8 @@ hic_is_chr = function(path) {
 ## Hi-C scoring window around a focus locus (e.g. a FISH probe gene) inside a large amplicon, for fastKar_ecfinder(score_region=).
 ## core: the contiguous run of nodes at CN > amp_mult x ploidy that overlaps focus (adjacent amplified nodes merged), +- pad;
 ## plus +- partner_pad around the far breakpoints of ALT junctions with an end in the core and CN > amp_mult x ploidy.
+## Only canonical chromosomes (1-22, X, Y, with or without 'chr') are kept: unplaced/alt contigs (e.g. 16_KI270728v1_random,
+## a high-CN junction partner in COLO320) are not scored.
 ## Returns the reduced window (GRanges), or NULL if focus is not on an amplified node.
 focus_score_window = function(gg, focus, amp_mult = 2, pad = 3e5, partner_pad = 1e6){
 	if (is(focus,'character')){focus = parse.gr(focus)}
@@ -435,5 +493,6 @@ focus_score_window = function(gg, focus, amp_mult = 2, pad = 3e5, partner_pad = 
 		bps = bps[!(bps %^% (core + pad))]
 		if (length(bps)){win = c(win[, c()], bps[, c()] + partner_pad)}
 	}
+	win = win[grepl('^(chr)?([0-9]+|X|Y)$', as.character(seqnames(win)))]
 	streduce(win[, c()])
 }
