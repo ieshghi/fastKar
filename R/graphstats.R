@@ -1000,6 +1000,21 @@ paste_loose_ends_eaglec = function(gg, calls, region = NULL, tol = 1e4, return_a
 	list(gg = newgg, calls = hit, pasted = pasted, loose = lo)
 }
 
+## Fold-back on loose ends of non-canonical contigs (user, 2026-11-02). JaBbA can send an amplicon into an unplaced contig
+## (COLO320: 16_KI270728v1_random, CN 329) whose loose end sits at the contig start, so it is flagged terminal and every
+## amplicon copy ends a walk there. Each loose end with CN >= 2 on a non-canonical contig (not 1-22, X, Y, with or without
+## 'chr') on a node overlapping ft is closed onto itself (an ALT edge from that side of the node to the same side) at CN
+## floor(cn / 2); an odd copy stays loose. Canonical loose ends are left as they are. Run after paste_loose_ends_eaglec().
+## Returns a freshly built graph (never shares an edge table with gg).
+fold_contig_ends = function(gg, ft){
+	if (is(ft,'character')){ft = parse.gr(ft)}
+	lo = gr2dt(gg$loose)
+	if (nrow(lo)){lo = lo[cn > 0 & !grepl('^(chr)?([0-9]+|X|Y)$', as.character(seqnames)) & node.id %in% (gg$nodes$gr %&% ft)$node.id]}
+	ne = lo[cn >= 2, .(n1 = node.id, n2 = node.id, n1.side = orientation, n2.side = orientation, cn = cn %/% 2, type = 'ALT')]
+	gg2 = gG(nodes = gg$nodes$gr, edges = rbind(copy(gg$edges$dt), ne, fill = TRUE))
+	gg2 = loosefix(gg2); gg2$set(y.field = 'cn'); gg2
+}
+
 
 
 ## `gr` with the chromosome lengths of graph `gg`, so that padding it (gr + x, then streduce) stops at the
