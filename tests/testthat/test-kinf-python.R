@@ -1,3 +1,7 @@
+## Slow (~13 min) and not used by the current projects: skipped unless FASTKAR_TEST_KINF=true (user, 2026-11-02).
+## Run with: FASTKAR_TEST_KINF=true Rscript -e "devtools::test('~/git/fastKar', filter = 'kinf-python')"
+skip_if_not(identical(Sys.getenv('FASTKAR_TEST_KINF'), 'true'), 'kinf Python tests are opt-in (FASTKAR_TEST_KINF=true)')
+
 ## The Python search end to end (needs a kinf environment: install_kinf()). Small problems, a few seconds each.
 
 test_that('toy problems with a known truth are recovered exactly (incl. a circular walk)', {
