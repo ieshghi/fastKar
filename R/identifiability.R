@@ -203,8 +203,8 @@ identifiability_context <- function(graph,
 ## local.sampling() chains each make n_swaps swaps from it, only at nodes inside
 ## the footprint (use.nodes). Every karyotype visited is a candidate; those with
 ## edit distance 0 to the truth are dropped, as are all but one of each set
-## identical inside the footprint (same .local_footprint_signature()), and a
-## random n_neighbors of the rest are kept. Events with few swappable nodes give
+## identical inside the footprint (same .local_footprint_signature()), and the
+## n_neighbors nearest to the truth (edit distance) are kept. Events with few swappable nodes give
 ## fewer candidates: then every distinct local karyotype is compared.
 ## kars[[1]] is the truth; swaps is the fewest swaps at which each was reached;
 ## hap is each karyotype's haploid signature (h1/h2 labels dropped), used to
@@ -240,7 +240,9 @@ sample_local_candidates <- function(ctx, n_neighbors = 99, n_walkers = 200, n_sw
     edit = vapply(stats, `[[`, numeric(1), 'edit')
     sig = vapply(stats, `[[`, character(1), 'sig')
     keep = which(edit > 0 & !duplicated(sig))
-    keep = keep[sample.int(length(keep), min(length(keep), n_neighbors))]
+    ## the n_neighbors nearest by edit distance (ties broken at random), not a random subset: a random subset
+    ## of a large pool rarely includes the hardest (nearest) alternatives, so P would depend on the pool size
+    keep = keep[order(edit[keep], runif(length(keep)))][seq_len(min(length(keep), n_neighbors))]
     locus = .haploid_locus(ctx$graph)
     hap = vapply(c(list(truth_raw), walks[keep]), .local_footprint_signature, character(1),
                  ctx = ctx, locus = locus)
