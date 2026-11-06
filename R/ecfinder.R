@@ -375,6 +375,8 @@ greedypeel = function(gg,circles,ft,deterministic=TRUE){
 	# not gg$copy: for graphs read from rds the copy shares gg's edge table, so subtract_walk's
 	# edge $mark would strip copy number from gg itself (and from everything sampled from it later)
 	gg.cur = gG(nodes = gg$nodes$gr, edges = copy(gg$edges$dt))
+	if (is(ft,'character')){ft = streduce(parse.gr(ft))}
+	amp_nodes = unique((gg.cur$nodes$gr %&% ft)$node.id)
 	scores = score_circles(mycirc,gg.cur,ft)[max.walk.cn>0 & score>0]
 	while (nrow(scores)){
 		if (deterministic | (nrow(scores)==1)){
@@ -386,6 +388,8 @@ greedypeel = function(gg,circles,ft,deterministic=TRUE){
 		mycirc = mycirc[!(walk.id == best$walk.id)]
 		peeled = c(peeled,rep(walk$snode.id,best$max.walk.cn))
 		gg.cur = subtract_walk(gg.cur,walk,best$max.walk.cn)
+		# amplicon fully peeled (100% circular; easy to reach when ft is a single node): done. score_circles would stop on it
+		if (sum(gg.cur$nodes$dt[amp_nodes]$cn) <= 0){break}
 		scores = score_circles(mycirc,gg.cur,ft)[max.walk.cn>0 & score>0]
 	}
 	list(circles=peeled,rest=loosefix(gg.cur))
