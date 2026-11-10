@@ -98,3 +98,23 @@ fastKar_integration_tiles = function(gg,mcool,target,mask=NULL,amp_cn=8,flank=5e
 		data.table(seqnames=character(),start=numeric(),end=numeric(),n_tiles=integer(),obs=numeric(),mu=numeric(),min_p=numeric())
 	list(call=if (nrow(sites)) 'Integrated' else 'no site',sites=sites,loci=loci,r=rr,theta=th,cut=cut,depth=if (is.null(depth)) NA else depth,ploidy=ploidy,amp_cn=acn,amp_tile=tl[isA],tiles=t[,!'id'])
 }
+
+# mcool helpers, moved from R/ecfinder.R (archived 2026-11-10); used by fastKar_integration_tiles() for estimate.depthratio(if.chr)
+hic_res = function(path) {
+	path = normalizePath(path)
+	pathtype = tools::file_ext(path)
+	if (pathtype=='hic'){
+		reses = strawr::readHicBpResolutions(path) %>% sort() %>% signif(., digits = 5)
+	}else if (pathtype=='mcool'){
+		cooler_details.dt = rhdf5::h5ls(path) %>% as.data.table()
+    		suppressWarnings(cooler_details.dt[,name := as.integer(name)])
+    		reses= cooler_details.dt[!is.na(name),]$name %>% sort()
+	}
+	return(reses)
+}
+
+hic_is_chr = function(path) {
+	if (tools::file_ext(path) != 'mcool') return(FALSE)
+	chroms = rhdf5::h5read(path, paste0('/resolutions/', hic_res(path)[1], '/chroms/name'))
+	any(grepl('^chr', chroms))
+}
