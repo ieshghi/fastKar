@@ -51,5 +51,5 @@ test_that('infer_karyotype rejects purity < 1 and unbalanced graphs', {
     bad = x$gg$copy
     bad$edges$mark(cn = bad$edges$dt$cn + 5L)
     expect_error(opt('.kinf_check_graph')(bad), 'not balanced')
-    expect_silent(opt('.kinf_check_graph')(x$gg))
+    expect_no_error(opt('.kinf_check_graph')(x$gg))
 })

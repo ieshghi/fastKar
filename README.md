@@ -226,4 +226,6 @@ Convergence benchmark: `bench/kinf/` (small CCLE events with simulated truths; `
 * `R/kinf.R`, `inst/python/kinf/` — karyotype inference by search (`install_kinf`, `infer_karyotype`)
 * `R/tests.R` — synthetic graph constructors (`make_threeway_repdup`, `gimme_bfb`, `makerepdup`)
 * `tests/testthat/` — regression and correctness tests
+  (run against the latest gGnome master, i.e. `devtools::load_all('~/git/gGnome')` as `~/.Rprofile` does by
+  default; not under `NO_DEV_GGNOME=1`, whose older installed gGnome emits extra data.table selfref warnings)
 * `bench/` — benchmark harness and history (drop real `gGraph` `.rds` files in `bench/graphs/`)
