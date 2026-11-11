@@ -154,8 +154,11 @@ karyotypes rather than a point estimator — the same pipeline scales to both re
 
 `bestfit_search` ranks randomly sampled karyotypes, which cannot reach the truth when the karyotype space is
 huge. `infer_karyotype` instead **searches** the wirings of the graph for the best fit to the Hi-C: an exact
-negative-binomial NLL with incremental updates per move, driven by parallel tempering, on a GPU (JAX). The Python
-code ships in `inst/python/kinf`; it runs in its own Python environment.
+negative-binomial NLL with incremental updates per move, driven by parallel tempering, on a GPU (JAX). Moves swap
+which copy of a node's left half continues into which copy of its right half. The NLL is the same as `compmaps()`:
+it is scored on the observed map's own bins (the model is simulated on finer tiles inside them and summed), so to
+fit at a finer scale, pass a finer map. The Python code ships in `inst/python/kinf`; it runs in its own Python
+environment.
 
 ### Install (once)
 
@@ -213,7 +216,10 @@ walks an agent through surveying a cluster (GPUs, partitions, shared filesystems
 `install_kinf()` arguments and checking the result. Claude Code finds it automatically when it runs inside a
 clone of this repository; otherwise point your agent at the file on GitHub.
 
-Convergence benchmark: `bench/kinf/` (small CCLE events with simulated truths; `run_kinf_bench.R`).
+Convergence benchmark: `bench/kinf/` (small CCLE events with simulated truths; `run_kinf_bench.R`). Research
+drivers (benchmark exports, search with a known truth, delta-NLL and walk-distance validators):
+`bench/kinf/research/` (README there). The kinf Python tests take ~13 min and are opt-in:
+`FASTKAR_TEST_KINF=true`.
 
 ---
 

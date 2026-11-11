@@ -39,12 +39,14 @@ infer_karyotype(
 \arguments{
 \item{gg}{gGraph with node copy numbers (gg$nodes$dt$cn) and junction copy numbers (gg$edges$dt$cn).}
 
-\item{hic}{gMatrix of observed counts, or the path to an .mcool (read at the finest resolution <= pix.size).}
+\item{hic}{gMatrix of observed counts, or the path to an .mcool (read at the finest resolution <= pix.size). The fit
+is scored on this map's own bins (those overlapping target_region); load a finer map for a finer fit.}
 
 \item{depth}{Hi-C depth (fastKar convention). Required for a gMatrix; for an .mcool, estimated with
 estimate.depthratio(hic, ploidy = ploidy) when NULL.}
 
-\item{pix.size}{tile size (bp) of the fit.}
+\item{pix.size}{simulation tile size (bp): the model is simulated on the data bins cut at pix.size and at node
+boundaries, then summed into the bins. For an .mcool it also picks the resolution read.}
 
 \item{target_region}{GRanges to fit; default: the whole graph (streduce(gg$nodes$gr)).}
 

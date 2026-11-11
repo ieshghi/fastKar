@@ -335,10 +335,12 @@ kinf_check = function(python = NULL, backend = c('local', 'slurm'), device = c('
 #' and reads the best wiring back as a gWalk on gg. Set up the Python side once with install_kinf().
 #'
 #' @param gg gGraph with node copy numbers (gg$nodes$dt$cn) and junction copy numbers (gg$edges$dt$cn).
-#' @param hic gMatrix of observed counts, or the path to an .mcool (read at the finest resolution <= pix.size).
+#' @param hic gMatrix of observed counts, or the path to an .mcool (read at the finest resolution <= pix.size). The fit
+#'   is scored on this map's own bins (those overlapping target_region); load a finer map for a finer fit.
 #' @param depth Hi-C depth (fastKar convention). Required for a gMatrix; for an .mcool, estimated with
 #'   estimate.depthratio(hic, ploidy = ploidy) when NULL.
-#' @param pix.size tile size (bp) of the fit.
+#' @param pix.size simulation tile size (bp): the model is simulated on the data bins cut at pix.size and at node
+#'   boundaries, then summed into the bins. For an .mcool it also picks the resolution read.
 #' @param target_region GRanges to fit; default: the whole graph (streduce(gg$nodes$gr)).
 #' @param ploidy used for the depth estimate from an .mcool.
 #' @param purity only 1 is supported.

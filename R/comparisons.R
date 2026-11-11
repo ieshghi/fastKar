@@ -383,6 +383,8 @@ kl_nb <- function(mu1, mu2, r=2,tinyval=1e-10,ifsum=T) { #get KL divergence betw
   }
 }
 
+#' Weighted NB NLL (or KL) of one Hi-C map under another
+#'
 #' Per-pixel NB NLL (or KL) of map_exp under map_theory, both on map_exp's bins, each pixel weighted by its
 #' area width_i * width_j / area0. area0 defaults to the squared median bin width of map_exp, so on evenly
 #' spaced observed bins every weight is 1 (only partial bins differ)
