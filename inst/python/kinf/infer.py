@@ -137,16 +137,17 @@ def load_init(P, path):
 
 def rescale_depth(P, n, seed, batch=64):
     """multiply P.depth (in place) by sum(observed) / median(sum(expected)) over n uniformly random wirings,
-    both over the upper triangle of the tile map; returns the ratio. The expected map is linear in depth."""
+    both over the upper triangle of the data-bin map (the expected tile map summed into bins, as the NLL); returns
+    the ratio. The expected map is linear in depth."""
     import jax, numpy as np
     import model, optimize as opt
     if len(P.var_nodes) == 0:
         n = 1
-    m = model.make_model(P)
-    tot = jax.jit(jax.vmap(lambda p: jax.numpy.sum(jax.numpy.triu(m.hard_expected_map(p)))))
+    m = model.make_model(P); to_bins = model.make_to_bins(P)
+    tot = jax.jit(jax.vmap(lambda p: jax.numpy.sum(jax.numpy.triu(to_bins(m.hard_expected_map(p))))))
     r = opt.random_perms(P, jax.random.PRNGKey(seed + 7919), n)
     totals = np.concatenate([np.asarray(tot({k: v[i:i + batch] for k, v in r.items()}) if r else
-                                        [float(np.sum(np.triu(np.asarray(m.hard_expected_map({})))))])
+                                        [float(np.sum(np.triu(np.asarray(to_bins(m.hard_expected_map({}))))))])
                              for i in range(0, n, batch)])
     ratio = float(np.sum(P.x_obs) / np.median(totals))
     P.depth *= ratio
