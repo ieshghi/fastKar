@@ -12,11 +12,14 @@
 #' @param gm gMatrix of observed counts.
 #' @param depth Hi-C depth (fastKar convention).
 #' @param purity only 1 is supported by the Python model.
-#' @param pix.size tile size (bp).
-#' @param target_region GRanges to tile and score (the Hi-C fit region); default gg$footprint. Nodes outside it are still wired.
+#' @param pix.size simulation tile size (bp); tiles are cut inside the data bins, which are what is scored.
+#' @param target_region GRanges of the Hi-C fit region; the data bins of gm overlapping it are scored (bins.csv). Default
+#'   gg$footprint. Nodes outside it are still wired.
 #' @param write.to.folder folder path ending in '/'; NULL: return the tables only.
 #' @param truth optional gWalk on gg (simulations): also writes truth_gwalks.json and truth_expected.csv (the
-#'   noiseless forward_simulate() map on the export's own tiling; i, j index rows of tiled_target.csv).
+#'   noiseless forward_simulate() map on the export's tiles, summed into the data bins; i, j index rows of bins.csv).
+#'   gm_dat.csv holds the observed counts on the data bins (i, j index bins.csv rows); tiled_target.csv has each
+#'   tile's bin.id.
 #' @return named list of the exported tables.
 prep_data_for_py <- function(gg,gm,depth,purity=1,pix.size=1e5,target_region=NULL,write.to.folder=NULL,truth=NULL){ 
   if (is.null(target_region)){
@@ -40,8 +43,18 @@ prep_data_for_py <- function(gg,gm,depth,purity=1,pix.size=1e5,target_region=NUL
 
   #Now we have to tile the target region which we are going to simulate and fit to data, making sure our tiles match up with edges of nodes
 
+  # the fit is scored on the data's own bins (2026-11-11, user: no assumption about how counts are spread inside a bin;
+  # reload the data at a finer resolution if needed): bins = the observed bins overlapping the target. The model is
+  # simulated on tiles = bins cut at pix.size and at half-node boundaries, so every tile lies inside one bin, and the
+  # expected map is summed into bins before scoring (as bestfit_search() simulates on the observed bins and compmaps()
+  # rebins onto them).
+  bins = gm$gr[gm$gr %^% target_region]
+  bins = GRanges(as.character(seqnames(bins)),ranges(bins))   # no seqinfo: a map's seqlengths can differ from the graph's
   #tiled.target = gr.merge(gr.tile(target_region,pix.size),dt2gr(nodesdt.split))[,c()]
-  tiled.target = gr.merge(gr.tile(target_region,pix.size),dt2gr(nodesdt.split[cn>0]))[,c()]
+  tiled.target = gr.merge(gr.tile(bins,pix.size),dt2gr(nodesdt.split[cn>0]))[,c()]
+  tb = findOverlaps(GRanges(as.character(seqnames(tiled.target)),ranges(tiled.target)),bins,type='within')
+  if (length(tb) != length(tiled.target) || any(duplicated(queryHits(tb)))){stop('prep_data_for_py: a tile is not inside exactly one data bin')}
+  tiled.target$bin.id = subjectHits(tb)[order(queryHits(tb))]
 
   #we want to consider every "copy" of every tile uniquely
   dedup.tiles = gr2dt(gr.merge(tiled.target,dt2gr(dedup.nodes)))[,tile.id:=query.id]
@@ -74,12 +87,11 @@ prep_data_for_py <- function(gg,gm,depth,purity=1,pix.size=1e5,target_region=NUL
   # We do a final merge of the nodes
   dedup.nodes = merge.data.table(dedup.nodes,nodesdt.split[,.(node_id=node.id,side,width)],by=c('node_id','side'),all.x=TRUE)[,.(node_id,side,unique.id,width)]
 
-  # rebin Hi-C data to match simulation tiles
-  # (fastKar::rebin_matrix splits counts by overlap and conserves the total; gm$disjoin()$agg() inflates cut tiles)
-  gm_rebin = rebin_matrix(gm,tiled.target)
+  # observed counts on the data bins, as they are (no split, no rounding); i, j index bins.csv rows
+  gm_rebin = rebin_matrix(gm,bins)
   
   # put in a named list and write to files for Python to read
-  data.out = list(tiled_target = gr2dt(tiled.target),dedup_tiles = dedup.tiles, nodes = dedup.nodes, internal_edges = internal_edges, external_edges = external_edges,gm_dat = gm_rebin$dat,depth=depth,purity=purity)
+  data.out = list(tiled_target = gr2dt(tiled.target),dedup_tiles = dedup.tiles, nodes = dedup.nodes, internal_edges = internal_edges, external_edges = external_edges,bins = gr2dt(bins),gm_dat = gm_rebin$dat,depth=depth,purity=purity)
   if (!is.null(write.to.folder)){
     lapply(1:length(data.out),function(i){
       thisname = names(data.out)[i]
@@ -87,7 +99,7 @@ prep_data_for_py <- function(gg,gm,depth,purity=1,pix.size=1e5,target_region=NUL
     })
   }
   # optional ground truth (a gWalk): noiseless R map at the same depth, simulated on the EXPORT's own tiling
-  # (rows of tiled_target.csv, tile.id = row index), so truth_expected.csv i,j index tiled_target.csv rows
+  # (rows of tiled_target.csv, tile.id = row index), then summed into the data bins: truth_expected.csv i,j index bins.csv rows
   if (!is.null(truth) && !is.null(write.to.folder)){
     nodesgr.t = truth$graph$gr[,c('node.id','cn')]
     nodesgr.t = nodesgr.t[strand(nodesgr.t)=='+']
@@ -100,6 +112,8 @@ prep_data_for_py <- function(gg,gm,depth,purity=1,pix.size=1e5,target_region=NUL
     tt.dt[,compartment:='A']
     prepped.t = list(tiled.target=tt.dt[,.(start,end,seqnames,tile.id,width,node.id,cn,compartment)],widthdt=gr2dt(nodesgr.t)[,.(nodewidth=width,node.id,start,end)])
     truth_sim = forward_simulate(truth,pix.size=pix.size,depth=depth,purity=purity,prepped=prepped.t)
+    # summed into the data bins (tiles nest in bins, so the rebin is an exact sum): i, j index bins.csv rows
+    truth_sim = rebin_matrix(gM(gr=tiled.target[,c()],dat=truth_sim$dat),bins)
     write.csv(truth_sim$dat[,.(i,j,value)],paste0(write.to.folder,'truth_expected.csv'),row.names=FALSE)
     writeLines(jsonlite::toJSON(list(snode.ids = lapply(truth$snode.id,function(x){as.integer(x)}), circular = as.logical(truth$circular)),auto_unbox=FALSE),paste0(write.to.folder,'truth_gwalks.json'))
   }

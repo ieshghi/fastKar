@@ -6,7 +6,10 @@ two rows change, and the set S of tile copies on them is the same before and aft
 different walks have no contacts (beyond the constant interchromosomal background), so only copy pairs in
 S x S change, hence only expected counts on tile pairs within tiles(S): the update costs O(|S|^2) instead of
 O(ntc^2). S is gathered into a fixed-capacity buffer chosen by lax.switch over a ladder of capacities.
-State: dict(b, info=(coord, wid, L, iscyc) per end, mu = full symmetric expected map, nll).
+Scoring is on the data bins (2026-11-11): the change of the tile map is summed into the bins of tiles(S)
+(model.make_to_bins conventions) and the NLL change is taken over those bin pairs.
+State: dict(b, info=(coord, wid, L, iscyc) per end, mu = full symmetric expected BIN map (diagonal = the bin's
+upper-triangle sum), nll).
 """
 import numpy as np
 import jax
@@ -25,10 +28,13 @@ def make_delta(problem, bigdist=1e12, dcut=1e10, theta=2.0, weighted=True, caps=
     tc_w = jnp.asarray(P.tc_w); tile_of = jnp.asarray(P.tc_tile)
     tw = jnp.asarray(P.tile_w); tcn = jnp.asarray(P.tile_cn)
     hd = 0.5 * P.depth
-    area0 = np.median(P.tile_w) ** 2
-    wp = jnp.asarray(P.tile_w[:, None] * P.tile_w[None, :] / area0) if weighted else jnp.ones((ntile, ntile))
+    nbin = P.nbin
+    area0 = np.median(P.bin_w) ** 2
+    wp = jnp.asarray(P.bin_w[:, None] * P.bin_w[None, :] / area0) if weighted else jnp.ones((nbin, nbin))
     x = jnp.asarray(P.x_obs)
-    tri = jnp.asarray(np.triu(np.ones((ntile, ntile), bool)))
+    tri = jnp.asarray(np.triu(np.ones((nbin, nbin), bool)))
+    to_bins = km.make_to_bins(P)
+    bin_ext = jnp.asarray(np.append(P.bin_of_tile, nbin))  # padded tile index ntile -> padded bin nbin
     caps = [c for c in sorted(caps) if c < ntc] + [ntc]
     caps_arr = jnp.asarray(caps)
 
@@ -62,7 +68,7 @@ def make_delta(problem, bigdist=1e12, dcut=1e10, theta=2.0, weighted=True, caps=
 
     @jax.jit
     def init(b):
-        info = walkinfo(b); mu = full_mu(info)
+        info = walkinfo(b); mu = to_bins(full_mu(info))
         return dict(b=b, info=info, mu=mu, nll=nll_of(mu))
 
     def branch(c):
@@ -77,13 +83,20 @@ def make_delta(problem, bigdist=1e12, dcut=1e10, theta=2.0, weighted=True, caps=
             tS = jnp.where(valid, tile_of[S], ntile)
             T = jnp.unique(tS, size=c, fill_value=ntile)
             loc = jnp.searchsorted(T, tS)
-            dmu = hd * jnp.zeros((c, c)).at[loc[:, None], loc[None, :]].add(dM, mode='drop')
-            p, q = T[:, None], T[None, :]
-            ok = (p < ntile) & (q < ntile) & (p <= q)
-            pc, qc = jnp.minimum(p, ntile - 1), jnp.minimum(q, ntile - 1)
+            dmu = hd * jnp.zeros((c, c)).at[loc[:, None], loc[None, :]].add(dM, mode='drop')  # tile map change on T x T
+            # sum into bins: off-diagonal bin pairs take every tile pair, a diagonal bin its pairs p <= q once
+            tb = bin_ext[T]
+            U = jnp.unique(tb, size=c, fill_value=nbin)
+            lb = jnp.searchsorted(U, tb)
+            dB = jnp.zeros((c, c)).at[lb[:, None], lb[None, :]].add(dmu, mode='drop')
+            dd = (jnp.diag(dB) + jnp.zeros(c).at[lb].add(jnp.diag(dmu), mode='drop')) / 2
+            dB = dB.at[jnp.arange(c), jnp.arange(c)].set(dd)
+            p, q = U[:, None], U[None, :]
+            ok = (p < nbin) & (q < nbin) & (p <= q)
+            pc, qc = jnp.minimum(p, nbin - 1), jnp.minimum(q, nbin - 1)
             mo = mu[pc, qc]; xx = x[pc, qc]
-            dnll = -jnp.sum(jnp.where(ok, wp[pc, qc] * (km.nb_logpmf(xx, mo + dmu, theta) - km.nb_logpmf(xx, mo, theta)), 0.0))
-            return dnll, mu.at[p, q].add(dmu, mode='drop')
+            dnll = -jnp.sum(jnp.where(ok, wp[pc, qc] * (km.nb_logpmf(xx, mo + dB, theta) - km.nb_logpmf(xx, mo, theta)), 0.0))
+            return dnll, mu.at[p, q].add(dB, mode='drop')
         return f
     branches = [branch(c) for c in caps]
 

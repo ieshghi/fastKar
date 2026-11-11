@@ -69,7 +69,7 @@ def main():
 
     folder = a.problem.rstrip('/')
     P = model.load_problem(folder)
-    log(f'problem {folder}: {P.ntile} tiles, {len(P.tc_uid)} tile copies, {len(P.var_nodes)} variable nodes')
+    log(f'problem {folder}: {P.nbin} data bins (scored), {P.ntile} tiles, {len(P.tc_uid)} tile copies, {len(P.var_nodes)} variable nodes')
     depth_ratio = 1.0
     if a.rescale > 0:
         depth_ratio = rescale_depth(P, a.rescale, a.seed)

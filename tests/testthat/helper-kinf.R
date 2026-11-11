@@ -18,10 +18,10 @@ kinf_export = function(x, dir = tempfile('kinf_test_')) {
     list(dir = dir, out = out)
 }
 
-## R reference NLL of an exported folder: area-weighted NB NLL (compdats, theta 2, area0 = median tile width^2)
-## of the observed map vs truth_expected.csv on the export tiling (as KI scripts/ref_nll.R)
+## R reference NLL of an exported folder: area-weighted NB NLL (compdats, theta 2, area0 = median bin width^2)
+## of the observed map vs truth_expected.csv on the data bins (bins.csv; scoring is on the data bins since 2026-11-11)
 kinf_ref_nll = function(dir) {
-    tt = data.table::fread(file.path(dir, 'tiled_target.csv'))
+    tt = data.table::fread(file.path(dir, 'bins.csv'))
     gr = GenomicRanges::GRanges(tt$seqnames, IRanges::IRanges(tt$start, tt$end))
     tmpl = data.table::as.data.table(make_template_dat_cpp(data.table::data.table(width = as.numeric(width(gr)))))
     obs = data.table::fread(file.path(dir, 'gm_dat.csv'))

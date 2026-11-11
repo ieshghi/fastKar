@@ -39,6 +39,22 @@ test_that('the Python truth NLL equals the R weighted NB NLL of the exported map
     }
 })
 
+test_that('kinf scores like fastKar: its truth NLL equals compmaps() of the observed map vs forward_simulate() on the data bins', {
+    skip_if_no_loosefix()
+    skip_if_not(kinf_available(), 'kinf Python not configured (install_kinf())')
+    data.table::setDTthreads(1)
+    ## data on 300 kb bins, simulation on 100 kb tiles (as bestfit_search: simulate on the observed bins, compmaps rebins)
+    x = kinf_toy(pix = 1e5, sim_pix = 3e5)
+    ex = kinf_export(x)
+    wd = tempfile('kinf_cmp_'); dir.create(wd)
+    opt('.kinf_launch')(problem = ex$dir, workdir = wd, python = kinf_python(),
+                        args = list(chains = 2, steps = 100, block = 50), truth = TRUE, verbose = FALSE)
+    s = jsonlite::read_json(file.path(wd, 'out', 'summary.json'), simplifyVector = TRUE)
+    bins = x$gm$gr[x$gm$gr %^% x$ft][, c()]
+    r = compmaps(x$gm, forward_simulate(x$truth, target_region = bins, pix.size = x$pix, depth = x$depth), theta = 2, ifsum = TRUE)
+    expect_equal(s$nll_truth, r, tolerance = 1e-9)
+})
+
 test_that('rescale leaves the depth unchanged up to the wiring spread and reports the ratio', {
     skip_if_no_loosefix()
     skip_if_not(kinf_available(), 'kinf Python not configured (install_kinf())')

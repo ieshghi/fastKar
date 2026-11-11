@@ -24,14 +24,17 @@ prep_data_for_py(
 
 \item{purity}{only 1 is supported by the Python model.}
 
-\item{pix.size}{tile size (bp).}
+\item{pix.size}{simulation tile size (bp); tiles are cut inside the data bins, which are what is scored.}
 
-\item{target_region}{GRanges to tile and score (the Hi-C fit region); default gg$footprint. Nodes outside it are still wired.}
+\item{target_region}{GRanges of the Hi-C fit region; the data bins of gm overlapping it are scored (bins.csv). Default
+gg$footprint. Nodes outside it are still wired.}
 
 \item{write.to.folder}{folder path ending in '/'; NULL: return the tables only.}
 
 \item{truth}{optional gWalk on gg (simulations): also writes truth_gwalks.json and truth_expected.csv (the
-noiseless forward_simulate() map on the export's own tiling; i, j index rows of tiled_target.csv).}
+noiseless forward_simulate() map on the export's tiles, summed into the data bins; i, j index rows of bins.csv).
+gm_dat.csv holds the observed counts on the data bins (i, j index bins.csv rows); tiled_target.csv has each
+tile's bin.id.}
 }
 \value{
 named list of the exported tables.

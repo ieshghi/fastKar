@@ -48,9 +48,19 @@ def load_problem(folder):
     tile_w = tt['width'].values.astype(float)
     tile_cn = np.bincount(tc_tile, minlength=ntile).astype(float)  # graph CN of the tile = number of copies
 
+    # scoring is on the data bins (bins.csv; 2026-11-11): every tile lies in one bin (tiled_target bin.id), the expected
+    # tile map is summed into bins (to_bins), and the observed counts are the bin counts as exported
+    import os
+    if not os.path.exists(folder + 'bins.csv') or 'bin.id' not in tt.columns:
+        raise ValueError(f'{folder}: no bins.csv / bin.id (exported before 2026-11-11, when kinf scored on tiles): '
+                         're-export with fastKar::prep_data_for_py()')
+    bins = rd('bins')
+    nbin = len(bins)
+    bin_w = bins['width'].values.astype(float)
+    bin_of_tile = tt['bin.id'].values.astype(int) - 1
     gm = rd('gm_dat')
-    x_obs = np.zeros((ntile, ntile))
-    x_obs[gm['i'].values - 1, gm['j'].values - 1] = np.round(gm['value'].values)  # upper triangle (i <= j)
+    x_obs = np.zeros((nbin, nbin))
+    x_obs[gm['i'].values - 1, gm['j'].values - 1] = np.round(gm['value'].values)  # upper triangle (i <= j); compdats rounds too
     assert (gm['i'].values <= gm['j'].values).all()
     depth = float(pd.read_csv(folder + 'depth.csv')['x'].iloc[0])
     purity = float(pd.read_csv(folder + 'purity.csv')['x'].iloc[0])
@@ -59,7 +69,8 @@ def load_problem(folder):
     return SimpleNamespace(folder=folder, nu=nu, node_of_uid=node_of_uid, side_of_uid=side_of_uid,
                            width_uid=width_uid, ext=ext, inner_fixed=inner_fixed, var_nodes=var_nodes,
                            ntile=ntile, tc_uid=tc_uid, tc_tile=tc_tile, tc_w=tc_w, offL=offL, offR=offR,
-                           tile_w=tile_w, tile_cn=tile_cn, x_obs=x_obs, depth=depth, nodes=nodes)
+                           tile_w=tile_w, tile_cn=tile_cn, x_obs=x_obs, depth=depth, nodes=nodes,
+                           nbin=nbin, bin_w=bin_w, bin_of_tile=bin_of_tile)
 
 #### graph distances
 
@@ -209,18 +220,31 @@ def nb_logpmf(x, mu, theta):
     lp = gammaln(x + theta) - gammaln(theta) - gammaln(x + 1) + theta * jnp.log(p) + x * jnp.log1p(-p)
     return jnp.where(mu > 0, lp, 0.0)  # R compdats: logprob[y == 0] = 0
 
+def make_to_bins(problem):
+    """tile map -> bin map: Y (full symmetric ntile x ntile, R map = upper triangle) to the full symmetric nbin x nbin
+    map whose upper triangle is rebin_matrix() of Y's upper triangle onto the data bins: off-diagonal bin pairs sum
+    all tile pairs (p in A, q in B); a diagonal bin sums its tile pairs p <= q once (= (sum_{p,q in A} Y + trace_A) / 2)."""
+    bot = jnp.asarray(problem.bin_of_tile); nb = problem.nbin
+    def to_bins(Y):
+        seg = lambda X: jax.ops.segment_sum(X, bot, num_segments=nb)
+        B = seg(seg(Y).T).T
+        d = (jnp.diag(B) + seg(jnp.diag(Y))) / 2
+        return B.at[jnp.arange(nb), jnp.arange(nb)].set(d)
+    return to_bins
+
 def make_nll_func(problem, theta=2.0, area0=None, weighted=True):
-    """compmaps conventions: upper triangle (i <= j, incl. diagonal), weight widthprod/area0,
-    area0 = median(tile width)^2, observed counts rounded. weighted=False gives every pixel weight 1, which is what
-    R's compmaps() does on gM objects (gM drops the widthprod column; see scripts/ref_nll.R)."""
-    w = problem.tile_w
+    """compmaps conventions on the DATA BINS (2026-11-11): the tile map Y is summed into bins (make_to_bins), then the
+    NB NLL over the upper triangle (i <= j, incl. diagonal), weight widthprod/area0 with bin widths, area0 = median(bin
+    width)^2, observed counts rounded (as compdats). weighted=False gives every pixel weight 1."""
+    w = problem.bin_w
     if area0 is None:
         area0 = np.median(w) ** 2
-    tri = jnp.asarray(np.triu(np.ones((problem.ntile,) * 2, bool)))
-    wp = jnp.asarray(w[:, None] * w[None, :]) / area0 if weighted else jnp.ones((problem.ntile,) * 2)
+    tri = jnp.asarray(np.triu(np.ones((problem.nbin,) * 2, bool)))
+    wp = jnp.asarray(w[:, None] * w[None, :]) / area0 if weighted else jnp.ones((problem.nbin,) * 2)
     x = jnp.asarray(problem.x_obs)
+    to_bins = make_to_bins(problem)
     def nll(Y):
-        return -jnp.sum(jnp.where(tri, wp * nb_logpmf(x, Y, theta), 0.0))
+        return -jnp.sum(jnp.where(tri, wp * nb_logpmf(x, to_bins(Y), theta), 0.0))
     return nll
 
 #### put it together
@@ -231,7 +255,8 @@ def make_model(problem, bigdist=1e12, dcut=1e10, theta=2.0, area0=None, weighted
                                    permutations {node: (CN,CN)}, by walk traversal
       hard_expected_map_fw(perms)  same by Floyd-Warshall (O(N^3) reference)
       walkdist(perms)              end x end distances by walk traversal
-      nll(Y)                       weighted NB NLL (compmaps convention)
+      nll(Y)                       weighted NB NLL of the tile map Y on the data bins (compmaps convention)
+      to_bins(Y)                   tile map summed into the data bins
       loss_perms(perms)            nll(hard_expected_map(perms))"""
     costfn = make_costmat_func(problem, bigdist)
     refine = make_refine_func(problem)
@@ -248,7 +273,7 @@ def make_model(problem, bigdist=1e12, dcut=1e10, theta=2.0, area0=None, weighted
     hard_expected_map = lambda perms: from_enddist(walkdist(perms))  # equals hard_expected_map_fw
     loss_perms = lambda perms: nll(hard_expected_map(perms))
     return SimpleNamespace(hard_expected_map=hard_expected_map, hard_expected_map_fw=hard_expected_map_fw,
-                           walkdist=walkdist, loss_perms=loss_perms, nll=nll, problem=problem)
+                           walkdist=walkdist, loss_perms=loss_perms, nll=nll, to_bins=make_to_bins(problem), problem=problem)
 
 def upper_triangle(Y):
     i, j = np.triu_indices(Y.shape[0])

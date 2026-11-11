@@ -5,7 +5,7 @@ test_that('prep_data_for_py writes every table and the truth files', {
     data.table::setDTthreads(1)
     x = kinf_toy()
     ex = kinf_export(x)
-    fs = c('tiled_target', 'dedup_tiles', 'nodes', 'internal_edges', 'external_edges', 'gm_dat', 'depth', 'purity')
+    fs = c('tiled_target', 'dedup_tiles', 'nodes', 'internal_edges', 'external_edges', 'bins', 'gm_dat', 'depth', 'purity')
     expect_true(all(file.exists(file.path(ex$dir, paste0(fs, '.csv')))))
     expect_true(file.exists(file.path(ex$dir, 'truth_gwalks.json')))
     expect_true(file.exists(file.path(ex$dir, 'truth_expected.csv')))
@@ -18,14 +18,20 @@ test_that('prep_data_for_py writes every table and the truth files', {
     expect_true(all(ie$copies == x$gg$nodes$dt$cn[match(ie$node_id, x$gg$nodes$dt$node.id)]))
 })
 
-test_that('the rebin onto the export tiles conserves observed counts', {
+test_that('the observed counts are exported on the data bins as they are, and every tile lies in one bin', {
     skip_if_no_loosefix()
     data.table::setDTthreads(1)
-    ## simulate on 300 kb pixels, export on 100 kb tiles: every pixel is split
+    ## data on 300 kb bins, simulation tiles of 100 kb: the bins are scored, the tiles nest in them
     x = kinf_toy(pix = 1e5, sim_pix = 3e5)
     ex = kinf_export(x)
-    expect_gt(nrow(ex$out$tiled_target), length(x$gm$gr))
+    expect_equal(nrow(ex$out$bins), length(x$gm$gr))
+    expect_gt(nrow(ex$out$tiled_target), nrow(ex$out$bins))
     expect_equal(sum(ex$out$gm_dat$value), sum(x$gm$dat$value), tolerance = 1e-10)
+    obs = merge(x$gm$dat[, .(i, j, value)], ex$out$gm_dat[, .(i, j, v2 = value)], by = c('i', 'j'), all = TRUE)
+    expect_equal(obs[!is.na(value)]$value, obs[!is.na(value)]$v2) # no split, no rescale
+    tt = ex$out$tiled_target; b = ex$out$bins
+    expect_true(all(tt$start >= b$start[tt$bin.id] & tt$end <= b$end[tt$bin.id] & tt$seqnames == b$seqnames[tt$bin.id]))
+    expect_equal(sum(tt$width), sum(b$width))
 })
 
 test_that('truth_gwalks.json round-trips through read_kinf_gwalks', {
