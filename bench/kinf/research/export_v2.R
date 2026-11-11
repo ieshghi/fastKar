@@ -10,7 +10,7 @@
 #   manifest.csv         folder, truth index, depth fraction, depth, seed
 # Usage: Rscript bench/kinf/research/export_v2.R   (run from the fastKar repo root)
 suppressMessages(devtools::load_all('~/git/fastKar'))
-root = '/gpfs/commons/home/ieshghi/Projects/karyotype-inference/'
+root = '/gpfs/commons/groups/imielinski_lab/projects/karyotyping/karyotype-inference/'
 outdir = paste0(root,'temp_data/v2/')
 pairs = readRDS('/gpfs/commons/home/sclarke/Projects/jabba_hic/db/pairs.rds')
 region = parse.gr("1:34603609-37500000,2:121488406-123511096,5:138827707-140552898,20:41565779-43466165")

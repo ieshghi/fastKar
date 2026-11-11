@@ -1,7 +1,7 @@
 import sys, os, glob
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), '../../../inst/python/kinf'))
 import model, walks
-V2 = '/gpfs/commons/home/ieshghi/Projects/karyotype-inference/temp_data/v2/'
+V2 = '/gpfs/commons/groups/imielinski_lab/projects/karyotyping/karyotype-inference/temp_data/v2/'
 prob = model.load_problem(V2 + 'sim_t1_d4')
 nok = 0
 for t in range(1, 34):

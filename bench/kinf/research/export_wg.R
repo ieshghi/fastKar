@@ -7,7 +7,7 @@ suppressMessages(devtools::load_all('~/git/fastKar'))
 args = commandArgs(trailingOnly=TRUE)
 pix = if (length(args) >= 1) as.numeric(args[1]) else 1e6
 ntruth = if (length(args) >= 2) as.integer(args[2]) else 3L
-root = '/gpfs/commons/home/ieshghi/Projects/karyotype-inference/'
+root = '/gpfs/commons/groups/imielinski_lab/projects/karyotyping/karyotype-inference/'
 outdir = paste0(root, 'temp_data/wg_skov3_', format(pix, scientific=FALSE), '/')
 dir.create(outdir, recursive=TRUE, showWarnings=FALSE)
 mk = function(f){dir.create(f, recursive=TRUE, showWarnings=FALSE); paste0(f, '/')}

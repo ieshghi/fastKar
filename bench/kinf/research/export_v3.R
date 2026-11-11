@@ -13,7 +13,7 @@
 #   export   (after choosing selected_events.txt) for each selected event: sim_t<i>_d<j>/ (5 truths x depth
 #            c(1,10); noisy = make_noisymap(forward_simulate(...),2)[[1]]), realdata/, manifest.csv, events.csv
 suppressMessages(devtools::load_all('~/git/fastKar'))
-root = '/gpfs/commons/home/ieshghi/Projects/karyotype-inference/'
+root = '/gpfs/commons/groups/imielinski_lab/projects/karyotyping/karyotype-inference/'
 outdir = paste0(root,'temp_data/v3/')
 dir.create(outdir,recursive=TRUE,showWarnings=FALSE)
 fdir = '~/projects/karyotyping/data/figure4_local_identifiability_flow/'
