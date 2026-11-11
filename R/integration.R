@@ -118,3 +118,220 @@ hic_is_chr = function(path) {
 	chroms = rhdf5::h5read(path, paste0('/resolutions/', hic_res(path)[1], '/chroms/name'))
 	any(grepl('^chr', chroms))
 }
+
+## ---- Karyotype hypotheses (restored 2026-11-11 from the archived R/ecfinder.R, ~/projects/karyotyping/archive/fastKar/ecfinder_removed_20261110.R) ----
+## boil_greedy(): ecDNA karyotypes (circles peeled greedily from the graph, rest decomposed); squeeze(): HSR karyotypes (lowest amplicon entropy).
+## Helpers: find_circles, score_circles, greedypeel, subtract_walk, amp.entropy, amp.entropy.raw, amp_walk_centric, fastKar_centromeres.
+
+find_circles = function(gg,ft,N,context.padding = 1e3,verbose=F,mc.cores=1){
+	if (is(ft,'character')){ft = streduce(graph_seqlengths(parse.gr(ft), gg))}
+	amplicon_context_nodes = (gg$nodes$gr %&% streduce(ft + context.padding))$node.id %>% unique
+	freeze.nodes = gg$nodes$dt[!(node.id %in% amplicon_context_nodes)]$node.id #we don't want to freeze nodes directly adjacent to the amplicon
+	if(verbose){message('Sampling circular walks from graph')}
+	circles = get_unique_walks(gg,N,mode='circular',frozen.nodes = freeze.nodes,mc.cores=mc.cores)
+	if (length(circles)==0){return(circles)}
+	circles.ft = tryCatch({
+		circles %&% ft
+	}, error=function(e){
+		ft.nodes = (gg$nodes$gr %&% ft)$node.id %>% unique
+		keep = unique(circles$nodesdt[abs(snode.id) %in% ft.nodes,walk.id])
+		circles[keep]
+	})
+	return(circles.ft)
+}
+
+score_circles = function(circles,gg,ft){
+	if (is(ft,'character')){ft = streduce(parse.gr(ft))}
+	if (length(circles)==0){
+		return(data.table(walk.id=integer(),ampfrac=numeric(),score=numeric(),max.walk.cn=integer()))
+	}
+	amplicon_nodes = (gg$nodes$gr %&% ft)$node.id %>% unique
+	amplicon_weight = sum(gg$nodes$dt[amplicon_nodes]$cn * gg$nodes$dt[amplicon_nodes]$width)
+	if (!is.finite(amplicon_weight) || amplicon_weight <= 0){
+		stop('Amplicon has zero graph copy-weight; cannot score circles')
+	}
+	node.cn = gg$nodes$dt$cn
+	names(node.cn) = gg$nodes$dt$node.id
+	node.width = gg$nodes$dt$width
+	names(node.width) = gg$nodes$dt$node.id
+	edge.cn = gg$edges$dt$cn
+	names(edge.cn) = gg$edges$dt$edge.id
+	walknodes = circles$nodesdt[,.(walk.id,node.id=abs(snode.id),walk.iid)]
+	walknodes[,cn:=.N,by=c('node.id','walk.id')]
+	walknodes[,graph.cn:=node.cn[as.character(node.id)]]
+	walknodes[,width:=node.width[as.character(node.id)]]
+	walknodes[is.na(graph.cn),graph.cn:=0]
+	walknodes[,maxN:=graph.cn%/%cn]
+	walknodes[,max.walk.cn.nodes:=min(maxN),by=walk.id]
+	walknodes[,walk.cn:=max.walk.cn.nodes*cn]
+	walkedges = circles$edgesdt[,.(walk.id,edge.id=abs(sedge.id),walk.iid)]
+	walkedges[,cn:=.N,by=c('edge.id','walk.id')]
+	walkedges[,graph.cn:=edge.cn[as.character(edge.id)]]
+	walkedges[is.na(graph.cn),graph.cn:=0]
+	walkedges[,maxN:=graph.cn%/%cn]
+	walkedge_scores = walkedges[,.(max.walk.cn.edges=min(maxN)),by=walk.id]
+	walknodes = merge.data.table(walknodes,walkedge_scores,by='walk.id',all.x=T)
+	walknodes[,max.walk.cn:=min(max.walk.cn.nodes,max.walk.cn.edges),by='walk.id']
+	walknodes[,ampfrac := max.walk.cn*sum(width*(node.id %in% amplicon_nodes)) / amplicon_weight,by=walk.id]
+	walkdt = unique(walknodes[,.(walk.id,ampfrac,score=max.walk.cn*ampfrac,max.walk.cn)])
+	walkdt[,prob:=score/sum(score)]
+	return(walkdt[order(score,decreasing=T)])
+}
+
+# greedy circle peel: repeatedly subtract a circle (the best-scoring one if deterministic, else sampled by score) at its
+# max copy number from a working copy of gg. Returns the peeled circles (snode.id lists, one per copy) and what is left
+# of the graph (loosefix-ed, so it can be decomposed with sample.gwalks)
+greedypeel = function(gg,circles,ft,deterministic=TRUE){
+	peeled = list()
+	mycirc = circles$copy
+	# not gg$copy: for graphs read from rds the copy shares gg's edge table, so subtract_walk's
+	# edge $mark would strip copy number from gg itself (and from everything sampled from it later)
+	gg.cur = gG(nodes = gg$nodes$gr, edges = copy(gg$edges$dt))
+	if (is(ft,'character')){ft = streduce(parse.gr(ft))}
+	amp_nodes = unique((gg.cur$nodes$gr %&% ft)$node.id)
+	scores = score_circles(mycirc,gg.cur,ft)[max.walk.cn>0 & score>0]
+	while (nrow(scores)){
+		if (deterministic | (nrow(scores)==1)){
+			best = scores[1]
+		}else{
+			best = scores[sample(1:nrow(scores),1,prob=scores$prob)]
+		}
+		walk = mycirc[best$walk.id]
+		mycirc = mycirc[!(walk.id == best$walk.id)]
+		peeled = c(peeled,rep(walk$snode.id,best$max.walk.cn))
+		gg.cur = subtract_walk(gg.cur,walk,best$max.walk.cn)
+		# amplicon fully peeled (100% circular; easy to reach when ft is a single node): done. score_circles would stop on it
+		if (sum(gg.cur$nodes$dt[amp_nodes]$cn) <= 0){break}
+		scores = score_circles(mycirc,gg.cur,ft)[max.walk.cn>0 & score>0]
+	}
+	list(circles=peeled,rest=loosefix(gg.cur))
+}
+
+subtract_walk = function(gg,walk,peel_cn=1){
+	if (length(walk)!=1){stop('subtract_walk expects a single-walk gWalk')}
+	if (length(peel_cn)!=1 || is.na(peel_cn) || peel_cn < 0){stop('peel_cn must be a non-negative scalar')}
+	if (peel_cn==0){return(gg)}
+	edge.cn = gg$edges$dt$cn
+	names(edge.cn) = gg$edges$dt$edge.id
+	node.cn = gg$nodes$dt$cn
+	names(node.cn) = gg$nodes$dt$node.id
+	edges_sub = walk$edgesdt[,.(edge.id=abs(sedge.id))][,.(sub_cn=.N*peel_cn),by=edge.id]
+	edges_sub[,graph.cn:=edge.cn[as.character(edge.id)]]
+	edges_sub[,remaining_cn:=graph.cn-sub_cn]
+	nodes_sub = walk$nodesdt[,.(node.id=abs(snode.id))][,.(sub_cn=.N*peel_cn),by=node.id]
+	nodes_sub[,graph.cn:=node.cn[as.character(node.id)]]
+	nodes_sub[,remaining_cn:=graph.cn-sub_cn]
+	if (any(edges_sub$remaining_cn < 0) || any(nodes_sub$remaining_cn < 0)){
+		stop('subtract_walk would produce negative copy number')
+	}
+	gg$nodes[nodes_sub$node.id]$mark(cn = nodes_sub$remaining_cn)
+	gg$edges[edges_sub$edge.id]$mark(cn = edges_sub$remaining_cn)
+	#gg = loosefix(gg)
+	return(gg)
+}
+
+boil_greedy = function(gg,ft,N,n_solns_try=1,mc.cores=1){
+	circles = find_circles(gg,ft,N=N,verbose=FALSE,mc.cores=mc.cores)
+	if(!length(circles)){return(sample.gwalks(gg,n_solns_try,verbose=F))}
+	boil = function(deterministic){
+		p = greedypeel(gg,circles,ft,deterministic)
+		rest.gw = sample.gwalks(p$rest,1,verbose=F)[[1]]
+		gW(graph=gg,snode.id=c(rest.gw$snode.id,p$circles),circular=c(rest.gw$circular,rep(T,length(p$circles))))
+	}
+	output = boil(deterministic=T)
+	if (n_solns_try>1){
+		output_rand = mclapply(1:n_solns_try,function(x){boil(deterministic=F)},mc.cores=mc.cores)
+		output = c(list(output),output_rand)
+		return(output[!duplicated(unlist(lapply(output,'[[','hash')))])
+	}else{
+		return(output)
+	}
+}
+
+#calculate entropy of the given nodes as distributed in the given gwalk object
+amp.entropy = function(gw,amp.nodes){
+	amp_nodesdt = gw$nodesdt[,.(walk.id,node.id=abs(snode.id))][node.id %in% amp.nodes]
+	amp_nodesdt[,walk.amp := .N,by=walk.id]
+	amp_nodesdt[,ampfrac:=walk.amp/nrow(.SD)]
+	walk.dist = unique(amp_nodesdt[,.(walk.id,ampfrac)])
+	-sum(walk.dist$ampfrac*log(walk.dist$ampfrac))
+}
+
+#amp.entropy() of a raw karyotype as sample.gwalks(return.gw=F) gives it (list(snode.id, circular)), without building a gWalk
+amp.entropy.raw = function(kar,amp.nodes){
+	nodes = abs(unlist(kar$snode.id))
+	walk = rep(seq_along(kar$snode.id),lengths(kar$snode.id))
+	walk.amp = tabulate(walk[nodes %in% amp.nodes],length(kar$snode.id))
+	ampfrac = walk.amp[walk.amp>0]/sum(walk.amp)
+	-sum(ampfrac*log(ampfrac))
+}
+
+# HSR hypotheses: the k_return sampled karyotypes with the lowest amplicon entropy (amplicon on few walks), non-amplicon
+# nodes frozen to the default wiring; circular walks touching the amplicon are embedded into linear ones (embedloops).
+# keep.acen = TRUE (default since 2026-11-02, user): all karyotypes eligible. keep.acen = FALSE: only karyotypes whose amplicon-heaviest walk (copy-weighted amplicon bp)
+# carries a centromere are eligible, since an acentric integrated array would be lost at division (on COLO320-HSR the
+# best-fit unrestricted HSR put 68% of the amplicon on an acentric palindrome). centromeres: GRanges, default
+# fastKar_centromeres(gg). No eligible karyotype: warning and an empty list.
+squeeze = function(gg,ft,N,k_return=1,verbose=F,mc.cores=1,keep.acen=TRUE,centromeres=NULL){
+	amplicon_nodes = (gg$nodes$gr %&% ft)$node.id %>% unique 
+	amplicon_context_nodes = (gg$nodes$gr %&% streduce(ft + 1e3))$node.id %>% unique 
+	freeze.nodes = gg$nodes$dt[!(node.id %in% amplicon_context_nodes)]$node.id #we don't want to freeze nodes directly adjacent to the amplicon, hence ft + 1e3
+	if (verbose){message('Sampling walks from graph')}
+	# raw karyotypes: gWalks for all N cost ~10x the memory and ~6x the time (NCIH-2170, N = 1000), and only k_return are kept
+	kars = sample.gwalks(gg,N,frozen.nodes = freeze.nodes,verbose=F,mc.cores=mc.cores,return.gw=F)
+	if (!keep.acen){
+		if (is.null(centromeres)){centromeres = fastKar_centromeres(gg)}
+		cen_nodes = unique((gg$nodes$gr %&% centromeres)$node.id)
+		node_width = as.numeric(width(gg$nodes$gr))
+		centric = vapply(kars,function(k){amp_walk_centric(k,amplicon_nodes,cen_nodes,node_width)},logical(1))
+		if (verbose){message(sum(centric),' of ',length(kars),' karyotypes have a centric amplicon walk')}
+		if (!any(centric)){
+			warning('squeeze: none of ',length(kars),' sampled karyotypes has its amplicon on a centric walk')
+			return(list())
+		}
+		kars = kars[centric]
+	}
+	if (verbose){message('Scoring walks')}
+	entropies = unlist(lapply(kars,function(k){amp.entropy.raw(k,amplicon_nodes)}))
+	top_walks = lapply(kars[head(order(entropies),k_return)],function(k){gW(graph=gg,snode.id=k$snode.id,circular=k$circular)})
+	rm(kars)
+	if(verbose){message(paste0('Genrating top-',k_return,' solutions'))}
+	mclapply(top_walks,function(gw){
+			 # circular walk on the amplicon (node test, not gw %&% ft: gUtils::grl.in's aggregate(formula = ) fails on R >= 4.4)
+			 if (any(gw$circular & vapply(gw$snode.id,function(x) any(abs(x) %in% amplicon_nodes),logical(1)))){
+				 tryCatch({embedloops(gw)
+				 }, error = function(msg){
+				 return(gw)})
+			 }else{gw}
+			 },mc.cores=mc.cores)
+}
+
+# TRUE if the walk of a raw karyotype (list(snode.id, circular), as sample.gwalks(return.gw = FALSE) gives it) that carries
+# the most amplicon bp (copy-weighted: a node traversed twice counts twice) visits a centromere node. Ties: the first walk.
+amp_walk_centric = function(kar,amp_nodes,cen_nodes,node_width){
+	nodes = abs(unlist(kar$snode.id))
+	walk = rep(seq_along(kar$snode.id),base::lengths(kar$snode.id))
+	in_amp = nodes %in% amp_nodes
+	if (!any(in_amp)){return(FALSE)}
+	amp_bp = vapply(split(node_width[nodes[in_amp]],factor(walk[in_amp],levels=seq_along(kar$snode.id))),sum,numeric(1))
+	any(nodes[walk == which.max(amp_bp)] %in% cen_nodes)
+}
+
+# Centromeres (UCSC cytoband acen bands, inst/extdata/centromeres_<build>.tsv) as GRanges named like gg's chromosomes
+# ('chr8' or '8'). build: 'hg19' or 'hg38'; NULL infers it from gg's chr1 length (graph_seqlengths(); JaBbA rounds
+# lengths to kb, so +- 1e4), and errors if chr1 matches neither.
+fastKar_centromeres = function(gg,build=NULL){
+	sl = GenomeInfoDb::seqlengths(graph_seqlengths(gg$nodes$gr,gg))
+	chr1 = sl[names(sl) %in% c('1','chr1')]
+	if (is.null(build)){
+		ref = c(hg19 = 249250621, hg38 = 248956422)
+		hit = names(ref)[length(chr1) == 1 & !is.na(chr1) & abs(ref - chr1[1]) <= 1e4]
+		if (length(hit) != 1){stop('fastKar_centromeres: cannot tell hg19 from hg38 by chr1 length (', paste(chr1, collapse = ','), '); pass build or centromeres')}
+		build = hit
+	}
+	f = system.file('extdata',paste0('centromeres_',build,'.tsv'),package='fastKar')
+	if (!nzchar(f)){stop('fastKar_centromeres: no centromere table for build ', build)}
+	d = data.table::fread(f,skip='seqnames')
+	if (any(grepl('^chr',names(sl)))){d[, seqnames := paste0('chr',seqnames)]}
+	GRanges(d$seqnames,IRanges(d$start,d$end))
+}
