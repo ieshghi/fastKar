@@ -9,6 +9,20 @@ A wiring is b: for each row of var_a (left inner end of every variable node, con
 """
 import json
 import os
+
+def cap_cpus(n=None):
+    """narrow CPU affinity to a block of FASTKAR_KINF_CORES CPUs (chosen by pid) so XLA's thread pools stay under ulimit -u;
+    an affinity already at or below the cap (taskset, infer_karyotype(cores =)) is left alone. Must run before the first JAX
+    computation (the backend starts lazily)."""
+    n = int(os.environ.get('FASTKAR_KINF_CORES', 8)) if n is None else int(n)
+    if n <= 0 or not hasattr(os, 'sched_getaffinity'):
+        return
+    cur = sorted(os.sched_getaffinity(0))
+    if len(cur) > n:
+        k = os.getpid() % (len(cur) // n)
+        os.sched_setaffinity(0, cur[k * n:(k + 1) * n])
+cap_cpus()  # on import: every user of the package (cli.py, scripts, tests) is capped
+
 from collections import defaultdict
 from typing import Any, Callable, NamedTuple
 import numpy as np

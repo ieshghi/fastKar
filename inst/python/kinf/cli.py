@@ -13,21 +13,10 @@ Usage: python cli.py PROBLEM OUT [--method pt|greedy] [--chains 16] [--steps 200
        [--init FILE] [--init-random 0] [--spec FILE]
 --spec FILE: Python file defining make(g, hic) -> dict(terms=..., energy=... optional) (see optimize.optimize); replaces the
 Hi-C NLL, the problem folder then needs only nodes/internal_edges/external_edges (hic = None); incompatible with --rescale/--truth.
-CPU use is capped to FASTKAR_KINF_CORES CPUs (default 8; 0 = no cap) before JAX starts.
+CPU use is capped to FASTKAR_KINF_CORES CPUs (default 8; 0 = no cap) when problem.py is imported, before JAX starts.
 Run with PYTHONPATH unset (env -u PYTHONPATH); entries from PYTHONPATH are dropped from sys.path here as well.
 """
 import os, sys
-def _cap_cpus(n=None):
-    """narrow CPU affinity to a block of FASTKAR_KINF_CORES CPUs (chosen by pid) so XLA's thread pools stay under ulimit -u;
-    an affinity already at or below the cap (taskset, infer_karyotype(cores =)) is left alone. Before the first JAX computation."""
-    n = int(os.environ.get('FASTKAR_KINF_CORES', 8)) if n is None else int(n)
-    if n <= 0 or not hasattr(os, 'sched_getaffinity'):
-        return
-    cur = sorted(os.sched_getaffinity(0))
-    if len(cur) > n:
-        k = os.getpid() % (len(cur) // n)
-        os.sched_setaffinity(0, cur[k * n:(k + 1) * n])
-_cap_cpus()
 _pp = [os.path.abspath(p) for p in os.environ.get('PYTHONPATH', '').split(os.pathsep) if p]
 sys.path[:] = [p for p in sys.path if os.path.abspath(p or '.') not in _pp]  # foreign PYTHONPATH breaks numpy
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -74,9 +63,9 @@ def main():
     if a.device == 'cpu':
         os.environ['JAX_PLATFORMS'] = 'cpu'
     os.environ.setdefault('XLA_PYTHON_CLIENT_PREALLOCATE', 'false')  # don't grab 75% of a shared GPU
+    import problem as pr, optimize as opt  # problem caps the CPUs on import, before the JAX backend starts
     import jax; jax.config.update('jax_enable_x64', True)
     import numpy as np
-    import problem as pr, optimize as opt
     log = lambda s: print(s, flush=True)
 
     devs = jax.devices()
