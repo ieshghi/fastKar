@@ -1,11 +1,13 @@
-"""problem.py reproduces regression.json (frozen from the old modules); walkdist == Floyd-Warshall; Graph.from_tables == Graph.load."""
+"""problem.py reproduces regression.json (frozen from the old modules); expected map == the dense references (walk traversal,
+Floyd-Warshall; tests/reference.py); Graph.from_tables == Graph.load."""
 import os, sys, json, shutil, tempfile
 import numpy as np, pandas as pd
 import jax, jax.numpy as jnp
 jax.config.update('jax_enable_x64', True)
 here = os.path.dirname(os.path.abspath(__file__)); kin = os.path.dirname(here)
-sys.path.insert(0, kin)
+sys.path.insert(0, kin); sys.path.insert(0, here)
 import problem as pr
+import reference as ref
 
 folder = os.path.join(kin, 'selftest')
 R = json.load(open(os.path.join(here, 'regression.json')))
@@ -24,13 +26,15 @@ rb = pr.random_b(g, jax.random.PRNGKey(0), 10)
 check('random_b == frozen wirings', (np.asarray(rb) == np.array(R['b'])).all())
 check('10 full NLLs', close([float(pr.nll(g, h, b)) for b in bs], R['nll']))
 check('perms_from_b round trip', all((np.asarray(pr.b_from_perms(g, pr.perms_from_b(g, b))) == np.asarray(b)).all() for b in bs))
-T = pr.make_nll_term(g, h)
-st = T['init'](bs[0]); check('init NLL', close(float(st['nll']), R['init_nll']))
+T = pr.nll_term(g, h)
+upd = jax.jit(T.update)
+b = bs[0]; ko = pr.kar(g, b); aux = T.init(ko); check('init NLL', close(float(T.value(aux)), R['init_nll']))
 seq = []
 for k in R['moves']:
-    i, j = g.moves[k]; _, st = T['propose'](st, int(i), int(j)); seq.append(float(st['nll']))
+    i, j = g.moves[k]; b = b.at[i].set(b[j]).at[j].set(b[i]); kn = pr.kar(g, b)
+    aux = upd(aux, ko, kn, i, j); ko = kn; seq.append(float(T.value(aux)))
 check('300 incremental NLLs', close(seq, R['move_nll']))
-check('incremental == full at the end', close(float(st['nll']), float(pr.nll(g, h, st['b']))))
+check('incremental == full at the end', close(float(T.value(aux)), float(pr.nll(g, h, b))))
 kars = []
 for b in bs:
     w, c = pr.perms_to_walks(g, pr.perms_from_b(g, b))
@@ -41,13 +45,13 @@ check('truth walks round trip same_karyotype', pr.same_karyotype(w0, c0, sn, cir
 h2 = pr.HiC.load(folder, g)
 check('rescale_depth ratio', close(pr.rescale_depth(g, h2, 64, 0), R['rescale_ratio']))
 
-# (b) walk traversal vs Floyd-Warshall
+# (b) walk traversal vs Floyd-Warshall; expected map vs the dense end-distance path
 ok = True
 for b in bs:
-    Dw = pr.walkdist(g, b); Df = pr.floyd_warshall(pr.fw_costmat(g, pr.perms_from_b(g, b)))
+    Dw = ref.walkdist(g, b); Df = ref.floyd_warshall(ref.fw_costmat(g, pr.perms_from_b(g, b)))
     ok &= bool(jnp.all(jnp.abs(Dw - Df) <= 1e-9 * jnp.maximum(1.0, jnp.abs(Df))))
 check('walkdist == Floyd-Warshall (10 wirings)', ok)
-check('expected_map == expected_map_fw', close(pr.expected_map(g, h, bs[0]), pr.expected_map_fw(g, h, pr.perms_from_b(g, bs[0]))))
+check('expected_map == dense reference', all(close(pr.expected_map(h, pr.kar(g, b)), ref.map_from_enddist(h, ref.walkdist(g, b))) for b in bs[:3]))
 
 # (c) from_tables vs load
 nd = pd.read_csv(folder + '/nodes.csv', index_col=0).sort_values('unique.id')

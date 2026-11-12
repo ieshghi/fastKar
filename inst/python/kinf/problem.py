@@ -1,5 +1,5 @@
-"""kinf problem: graph (wiring space), Hi-C data + forward model, exact NLL. Merges model.py, hic_model.py, walks.py and
-the NLL of delta.py (pure move).
+"""kinf problem: the graph (wiring space), wirings and walks, the walk structure every score sees (Kar), the Hi-C data and
+forward model, and the exact NLL (full, and incremental as a Term for optimize.py).
 
 Encoding (R/backwards.R prep_data_for_py): every copy of every half-node has a unique id (uid, 0-based). A left half has its
 OUTER end at its genomic left end and its INNER end at the right end; a right half the opposite. Junction copies (ext)
@@ -10,7 +10,7 @@ A wiring is b: for each row of var_a (left inner end of every variable node, con
 import json
 import os
 from collections import defaultdict
-from types import SimpleNamespace
+from typing import Any, Callable, NamedTuple
 import numpy as np
 import pandas as pd
 import jax
@@ -260,9 +260,9 @@ def canonical(walk, circular):
 def same_karyotype(w1, c1, w2, c2):
     return sorted(canonical(w, c) for w, c in zip(w1, c1)) == sorted(canonical(w, c) for w, c in zip(w2, c2))
 
-#### walk traversal (shared by every score that needs walks)
+#### walk structure: what every score sees
 
-def walkinfo(g, b, bigdist=1e12):
+def walkinfo(g, b):
     """exact walk structure of a hard wiring b, without Floyd-Warshall: every end has at most one link partner, so the genome
     is a set of disjoint walks (paths and cycles), found by pointer jumping (log2 N gather rounds; jittable, vmappable).
     State a = 'enter half-copy a//2 at end a, leave at end a^1'; succ(a) = link partner of a^1 (or sink N).
@@ -299,46 +299,17 @@ def walkinfo(g, b, bigdist=1e12):
     iscyc = jnp.zeros(N, bool).at[c].set(cyc[c]).at[ce].set(cyc[c])
     return coord, wid, L, iscyc
 
-def walkdist(g, b, bigdist=1e12):
-    """end x end distances: along the shared walk (shorter way round on a cycle), bigdist between walks"""
-    coord, wid, L, iscyc = walkinfo(g, b)
-    d = jnp.abs(coord[:, None] - coord[None, :])
-    d = jnp.where(iscyc[:, None], jnp.minimum(d, L[:, None] - d), d)
-    D = jnp.where(wid[:, None] == wid[None, :], d, bigdist)
-    return D.at[jnp.diag_indices(2 * g.nu)].set(0.0)
+class Kar(NamedTuple):
+    """a wiring b and its walk structure (per end: coord, wid, L, iscyc; see walkinfo)"""
+    b: Any; coord: Any; wid: Any; L: Any; iscyc: Any
 
-def fw_costmat(g, perms, bigdist=1e12):
-    """(2nu x 2nu) one-step cost over ends: half width inside a half; junction and present permutation links 0; absent bigdist"""
-    N = 2 * g.nu; side = g.side_of_uid
-    base = np.full((N, N), bigdist)
-    np.fill_diagonal(base, 0.0)
-    e = np.arange(g.nu)
-    base[2 * e, 2 * e + 1] = g.width_uid
-    base[2 * e + 1, 2 * e] = g.width_uid
-    for n1, n2 in g.ext:
-        a = outer_end(side[n1], n1); c = outer_end(side[n2], n2)
-        base[a, c] = base[c, a] = 0.0
-    for l, r in g.inner_fixed:
-        a = inner_end(side[l], l); c = inner_end(side[r], r)
-        base[a, c] = base[c, a] = 0.0
-    for n in g.vnodes:
-        l, r = g.var_nodes[n]
-        rr, cc = np.meshgrid(inner_end(0, l), inner_end(1, r), indexing='ij')
-        v = np.where(np.asarray(perms[n]).ravel() > 0.5, 0.0, bigdist)
-        base[rr.ravel(), cc.ravel()] = v; base[cc.ravel(), rr.ravel()] = v
-    return jnp.asarray(base)
+def kar(g, b):
+    return Kar(b, *walkinfo(g, b))
 
-def floyd_warshall(D):
-    """all-pairs shortest path (exact; O(N^3) reference for walkdist)"""
-    N = D.shape[0]
-    idx = jnp.arange(N)
-    def body(k, D):
-        new = D[:, k][:, None] + D[k, :][None, :]
-        upd = jnp.minimum(D, new)
-        keep = (idx[:, None] == k) | (idx[None, :] == k)
-        return jnp.where(keep, D, upd)
-    D = jax.lax.fori_loop(0, N, body, D)
-    return D.at[jnp.diag_indices(N)].set(0.0)
+class Term(NamedTuple):
+    """a score with an incremental form (optimize.py): init(kar) -> aux; value(aux) -> scalar;
+    update(aux, kar_old, kar_new, i, j) -> aux after swapping rows i, j of b"""
+    init: Callable; value: Callable; update: Callable
 
 #### Hi-C forward model (port of fastKar R/forward.R + src/forward_kernel.cpp; constants from data/fastkar_model.json)
 
@@ -476,122 +447,78 @@ def to_bins(hic, Y):
     d = (jnp.diag(B) + seg(jnp.diag(Y))) / 2
     return B.at[jnp.arange(nb), jnp.arange(nb)].set(d)
 
-def bin_weights(hic, weighted=True, area0=None):
-    w = hic.bin_w
-    area0 = np.median(w) ** 2 if area0 is None else area0
-    return jnp.asarray(w[:, None] * w[None, :]) / area0 if weighted else jnp.ones((hic.nbin,) * 2)
+def tc_dist(hic, kar, I, J, bigdist=1e12):
+    """distances between tile copies I and J (index arrays, broadcast) on the wiring kar: min over the 4 end pairings of offset +
+    end-end distance along the shared walk (shorter way round a cycle; bigdist between walks); |difference of offsets| within
+    one half copy; 0 for I == J"""
+    uid = jnp.asarray(hic.tc_uid); oL = jnp.asarray(hic.offL); oR = jnp.asarray(hic.offR)
+    def ed(e1, e2):
+        d = jnp.abs(kar.coord[e1] - kar.coord[e2])
+        d = jnp.where(kar.iscyc[e1], jnp.minimum(d, kar.L[e1] - d), d)
+        d = jnp.where(kar.wid[e1] == kar.wid[e2], d, bigdist)
+        return jnp.where(e1 == e2, 0.0, d)
+    Li, Ri, Lj, Rj = 2 * uid[I], 2 * uid[I] + 1, 2 * uid[J], 2 * uid[J] + 1
+    m = jnp.minimum(jnp.minimum(ed(Li, Lj) + oL[I] + oL[J], ed(Ri, Rj) + oR[I] + oR[J]),
+                    jnp.minimum(ed(Li, Rj) + oL[I] + oR[J], ed(Ri, Lj) + oR[I] + oL[J]))
+    d = jnp.where(uid[I] == uid[J], jnp.abs(oL[I] - oL[J]), m)
+    return jnp.where(I == J, 0.0, d)
 
-def nll_of_map(hic, Y, theta=2.0, weighted=True, area0=None):
-    """compmaps conventions on the data bins: tile map Y summed into bins, NB NLL over the upper triangle (incl. diagonal),
-    weight widthprod/area0 (area0 = median(bin width)^2), observed counts rounded. weighted=False: every pixel weight 1."""
-    tri = jnp.asarray(np.triu(np.ones((hic.nbin,) * 2, bool)))
-    wp = bin_weights(hic, weighted, area0)
-    return -jnp.sum(jnp.where(tri, wp * nb_logpmf(jnp.asarray(hic.x_obs), to_bins(hic, Y), theta), 0.0))
+def expected_map(hic, kar, dcut=1e10):
+    """expected counts, full symmetric tile x tile map (R map = upper triangle), for the wiring kar"""
+    a = jnp.arange(len(hic.tc_uid))
+    return contact_model(tc_dist(hic, kar, a[:, None], a[None, :]), jnp.asarray(hic.tc_w), jnp.asarray(hic.tc_tile),
+                         jnp.asarray(hic.tile_w), jnp.asarray(hic.tile_cn), hic.depth, dcut)
 
-def refine(hic, Dend):
-    """end-end distances -> tile-copy x tile-copy distances: min over the 4 end pairings of offset + end-end distance for copies
-    in different half-copies; |difference of offsets| within one half copy."""
-    uid = hic.tc_uid
-    Lu = jnp.asarray(2 * uid); Ru = jnp.asarray(2 * uid + 1)
-    oL = jnp.asarray(hic.offL); oR = jnp.asarray(hic.offR)
-    same = jnp.asarray(uid[:, None] == uid[None, :])
-    delta = jnp.abs(oL[:, None] - oL[None, :])
-    eye = jnp.eye(len(uid), dtype=bool)
-    LL = Dend[Lu][:, Lu] + oL[:, None] + oL[None, :]
-    RR = Dend[Ru][:, Ru] + oR[:, None] + oR[None, :]
-    LR = Dend[Lu][:, Ru] + oL[:, None] + oR[None, :]
-    RL = Dend[Ru][:, Lu] + oR[:, None] + oL[None, :]
-    d = jnp.where(same, delta, jnp.min(jnp.stack([LL, RR, LR, RL]), axis=0))
-    return jnp.where(eye, 0.0, d)
-
-def expected_map_from_dist(hic, Dend, dcut=1e10):
-    return contact_model(refine(hic, Dend), jnp.asarray(hic.tc_w), jnp.asarray(hic.tc_tile), jnp.asarray(hic.tile_w),
-                         jnp.asarray(hic.tile_cn), hic.depth, dcut, get_constants())
-
-def expected_map(g, hic, b, dcut=1e10):
-    """full symmetric tile x tile expected counts for the wiring b, by walk traversal"""
-    return expected_map_from_dist(hic, walkdist(g, b), dcut)
-
-def expected_map_fw(g, hic, perms, dcut=1e10):
-    """same by Floyd-Warshall (O(N^3) reference), from hard permutations {node: (CN,CN)}"""
-    return expected_map_from_dist(hic, floyd_warshall(fw_costmat(g, perms)), dcut)
+def nll_of_bins(hic, mu, theta=2.0, weighted=True):
+    """compmaps conventions: NB NLL of the bin map mu over the upper triangle (incl. diagonal), pixel weight widthprod / area0
+    (area0 = median(bin width)^2; weighted=False: 1), observed counts rounded (HiC.load)"""
+    w = hic.bin_w; n = hic.nbin
+    wp = jnp.asarray(w[:, None] * w[None, :]) / np.median(w) ** 2 if weighted else jnp.ones((n, n))
+    tri = jnp.asarray(np.triu(np.ones((n, n), bool)))
+    return -jnp.sum(jnp.where(tri, wp * nb_logpmf(jnp.asarray(hic.x_obs), mu, theta), 0.0))
 
 def nll(g, hic, b, theta=2.0, weighted=True):
-    """full NLL of the wiring b"""
-    return nll_of_map(hic, expected_map(g, hic, b), theta, weighted)
+    """full NLL of the wiring b on the data bins"""
+    return nll_of_bins(hic, to_bins(hic, expected_map(hic, kar(g, b))), theta, weighted)
 
 def rescale_depth(g, hic, n, seed, batch=64):
     """multiply hic.depth (in place) by sum(observed) / median(sum(expected)) over n uniformly random wirings, both over the
     upper triangle of the data-bin map; returns the ratio. The expected map is linear in depth."""
     if len(g.vnodes) == 0:
         n = 1
-    tot = jax.jit(jax.vmap(lambda b: jnp.sum(jnp.triu(to_bins(hic, expected_map(g, hic, b))))))
+    tot = jax.jit(jax.vmap(lambda b: jnp.sum(jnp.triu(to_bins(hic, expected_map(hic, kar(g, b)))))))
     r = random_b(g, jax.random.PRNGKey(seed + 7919), n)
     totals = np.concatenate([np.asarray(tot(r[i:i + batch])) for i in range(0, n, batch)])
     ratio = float(np.sum(hic.x_obs) / np.median(totals))
     hic.depth *= ratio
     return ratio
 
-#### incremental NLL for single transpositions
-
-def make_nll_term(g, hic, bigdist=1e12, dcut=1e10, theta=2.0, weighted=True, caps=(64, 128, 256, 512, 1024, 2048, 4096)):
-    """Exact incremental hard NLL for single transpositions (MCMC / greedy search on large graphs).
-    A move swaps b[i], b[j] for two rows of the same node. Only the walks through those two rows change, and the set S of tile
-    copies on them is the same before and after the swap. Tile copies on different walks have no contacts (beyond the constant
-    interchromosomal background), so only copy pairs in S x S change, hence only expected counts on tile pairs within tiles(S):
-    the update costs O(|S|^2) instead of O(ntc^2). S is gathered into a fixed-capacity buffer chosen by lax.switch over a ladder
-    of capacities; the change of the tile map is summed into the bins of tiles(S) (to_bins conventions).
-    State: dict(b, info=walkinfo(b), mu = full symmetric expected BIN map (diagonal = the bin's upper-triangle sum), nll).
-    Returns dict(init(b) -> state, propose(state, i, j) -> (dnll, new state), affected, nll_of, full_mu)."""
-    var_a = jnp.asarray(g.var_a)
+def nll_term(g, hic, dcut=1e10, theta=2.0, weighted=True, caps=(64, 128, 256, 512, 1024, 2048, 4096)):
+    """the exact NLL as an incremental Term; aux = (mu = full symmetric expected BIN map (diagonal = the bin's upper-triangle
+    sum), nll). A move swaps b[i], b[j] for two rows of one node. Only the walks through those rows change, and the set S of
+    tile copies on them is the same before and after. Copies on different walks have no contacts (beyond the constant
+    interchromosomal background), so only copy pairs in S x S change, hence only tile pairs within tiles(S): the update costs
+    O(|S|^2) instead of O(ntc^2). S is gathered into a fixed-capacity buffer chosen by lax.switch over a ladder of capacities
+    (so the update cannot be vmapped efficiently); the change of the tile map is summed into the bins of tiles(S) (to_bins)."""
     K = get_constants()
-    uid = hic.tc_uid; ntc = len(uid); ntile = hic.ntile
-    Lu = jnp.asarray(2 * uid); Ru = jnp.asarray(2 * uid + 1); uidj = jnp.asarray(uid)
-    oL = jnp.asarray(hic.offL); oR = jnp.asarray(hic.offR)
-    tc_w = jnp.asarray(hic.tc_w); tile_of = jnp.asarray(hic.tc_tile)
-    tw = jnp.asarray(hic.tile_w); tcn = jnp.asarray(hic.tile_cn)
-    hd = 0.5 * hic.depth
-    nbin = hic.nbin
-    wp = bin_weights(hic, weighted)
+    var_a = jnp.asarray(g.var_a)
+    ntc = len(hic.tc_uid); ntile = hic.ntile; nbin = hic.nbin; hd = 0.5 * hic.depth
+    Lu = jnp.asarray(2 * hic.tc_uid); tc_w = jnp.asarray(hic.tc_w); tile_of = jnp.asarray(hic.tc_tile)
+    w = hic.bin_w
+    wp = jnp.asarray(w[:, None] * w[None, :] / np.median(w) ** 2) if weighted else jnp.ones((nbin, nbin))
     x = jnp.asarray(hic.x_obs)
-    tri = jnp.asarray(np.triu(np.ones((nbin, nbin), bool)))
     bin_ext = jnp.asarray(np.append(hic.bin_of_tile, nbin))  # padded tile index ntile -> padded bin nbin
     caps = [c for c in sorted(caps) if c < ntc] + [ntc]
     caps_arr = jnp.asarray(caps)
 
-    def end_dist(info, e1, e2):
-        coord, wid, L, iscyc = info
-        d = jnp.abs(coord[e1] - coord[e2])
-        d = jnp.where(iscyc[e1], jnp.minimum(d, L[e1] - d), d)
-        d = jnp.where(wid[e1] == wid[e2], d, bigdist)
-        return jnp.where(e1 == e2, 0.0, d)
-
-    def tc_dist(info, I, J):  # = refine(walkdist(.)) restricted to tile-copy pairs (I, J)
-        m = jnp.minimum(jnp.minimum(end_dist(info, Lu[I], Lu[J]) + oL[I] + oL[J], end_dist(info, Ru[I], Ru[J]) + oR[I] + oR[J]),
-                        jnp.minimum(end_dist(info, Lu[I], Ru[J]) + oL[I] + oR[J], end_dist(info, Ru[I], Lu[J]) + oR[I] + oL[J]))
-        d = jnp.where(uidj[I] == uidj[J], jnp.abs(oL[I] - oL[J]), m)
-        return jnp.where(I == J, 0.0, d)
-
-    def full_mu(info):
-        a = jnp.arange(ntc)
-        return contact_model(tc_dist(info, a[:, None], a[None, :]), tc_w, tile_of, tw, tcn, hic.depth, dcut, K)
-
-    def nll_of(mu):
-        return -jnp.sum(jnp.where(tri, wp * nb_logpmf(x, mu, theta), 0.0))
-
-    @jax.jit
-    def init(b):
-        info = walkinfo(g, b, bigdist); mu = to_bins(hic, full_mu(info))
-        return dict(b=b, info=info, mu=mu, nll=nll_of(mu))
-
     def branch(c):
         def f(args):
-            mask, cnt, info, info2, mu = args
+            mask, cnt, ko, kn, mu = args
             S = jnp.nonzero(mask, size=c, fill_value=0)[0]
             valid = jnp.arange(c) < cnt
             I, J = S[:, None], S[None, :]
             wS = tc_w[S]
-            dM = contact_matrix(tc_dist(info2, I, J), wS, dcut, K) - contact_matrix(tc_dist(info, I, J), wS, dcut, K)
+            dM = contact_matrix(tc_dist(hic, kn, I, J), wS, dcut, K) - contact_matrix(tc_dist(hic, ko, I, J), wS, dcut, K)
             dM = jnp.where(valid[:, None] & valid[None, :], dM, 0.0)
             tS = jnp.where(valid, tile_of[S], ntile)
             T = jnp.unique(tS, size=c, fill_value=ntile)
@@ -613,40 +540,17 @@ def make_nll_term(g, hic, bigdist=1e12, dcut=1e10, theta=2.0, weighted=True, cap
         return f
     branches = [branch(c) for c in caps]
 
-    def delta(mu, info, info2, i, j):
-        """exact change of the NLL and the new bin map for swapping rows i, j; info / info2 = walk structure before / after"""
-        wid = info[1]; tcw = wid[Lu]
-        mask = (tcw == wid[var_a[i]]) | (tcw == wid[var_a[j]])
-        cnt = mask.sum()
-        k = jnp.searchsorted(caps_arr, cnt)
-        return jax.lax.switch(k, branches, (mask, cnt, info, info2, mu))
-
-    def propose(state, i, j):
-        """exact proposal for swapping rows i, j: returns (dnll, new state)"""
-        b = state['b']; info = state['info']
-        b2 = b.at[i].set(b[j]).at[j].set(b[i])
-        info2 = walkinfo(g, b2, bigdist)
-        dnll, mu2 = delta(state['mu'], info, info2, i, j)
-        return dnll, dict(b=b2, info=info2, mu=mu2, nll=state['nll'] + dnll)
-
-    def affected(state, i, j):  # |S| for diagnostics
-        wid = state['info'][1]; tcw = wid[Lu]
-        return ((tcw == wid[var_a[i]]) | (tcw == wid[var_a[j]])).sum()
-
-    return dict(init=init, propose=propose, affected=affected, nll_of=nll_of, full_mu=full_mu, caps=caps, delta=delta)
-
-def nll_term(g, hic, **kw):
-    """the exact hard NLL as an optimize.Term: aux = (bin map mu, nll); update uses the walk structures kar_old / kar_new
-    (no walkinfo inside). Same capacity-ladder update as make_nll_term."""
-    from optimize import Term
-    P = make_nll_term(g, hic, **kw)
     def init(kar):
-        mu = to_bins(hic, P['full_mu'](kar[1:]))
-        return (mu, P['nll_of'](mu))
-    def update(aux, kar_old, kar_new, i, j):
-        dnll, mu2 = P['delta'](aux[0], kar_old[1:], kar_new[1:], i, j)
-        return (mu2, aux[1] + dnll)
-    return Term(init=init, value=lambda aux: aux[1], update=update)
+        mu = to_bins(hic, expected_map(hic, kar, dcut))
+        return mu, nll_of_bins(hic, mu, theta, weighted)
+    def update(aux, ko, kn, i, j):
+        tcw = ko.wid[Lu]
+        mask = (tcw == ko.wid[var_a[i]]) | (tcw == ko.wid[var_a[j]])
+        cnt = mask.sum()
+        dnll, mu2 = jax.lax.switch(jnp.searchsorted(caps_arr, cnt), branches, (mask, cnt, ko, kn, aux[0]))
+        return mu2, aux[1] + dnll
+    return Term(init, lambda aux: aux[1], update)
+
 
 def distinct_karyotypes(g, top, k):
     """the k lowest-E entries of top (pairs (E, b)) that are distinct karyotypes: list of dict(E, b, walks, circular)"""

@@ -1,4 +1,4 @@
-"""optimize.py on the selftest problem (agreement with the old engine was verified before it was removed, commit 3798ff7); incremental NLL; scores; plain-score runs."""
+"""optimize.py on the selftest problem (old engine: frozen result in regression.json); incremental NLL; scores; plain-score runs."""
 import os, sys
 import numpy as np
 import jax, jax.numpy as jnp
@@ -13,6 +13,14 @@ def check(name, ok): print(('PASS ' if ok else 'FAIL ') + name, flush=True)
 quiet = lambda s: None
 
 nl = pr.nll_term(g, h)
+
+# 1. old engine (frozen in regression.json): same best NLL, wiring and top-3
+import json
+R = json.load(open(os.path.join(here, 'regression.json')))['search_selftest']
+r = op.optimize(g, [nl], T=np.geomspace(1, 1000, 4), chains=4, steps=200, block=50, seed=1, topk=3, log=quiet)
+top = [t['E'] for t in pr.distinct_karyotypes(g, r['top'], 3)]
+check('old engine: best NLL, best b, top-3', np.isclose(r['best']['E'], R['best_nll'], rtol=1e-10, atol=0)
+      and (r['best']['b'] == np.array(R['best_b'])).all() and np.allclose(top, R['topk_nll'], rtol=1e-10, atol=0))
 
 # 2. incremental vs full NLL after 300 random moves
 b = pr.random_b(g, jax.random.PRNGKey(5), 1)[0]

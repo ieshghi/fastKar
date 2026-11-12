@@ -1,28 +1,14 @@
 """Generic optimizer of kinf: MCMC (Metropolis, optional parallel tempering / annealing) over wirings b of a genome graph.
 
-A score is a Term(init, value, update) or a plain jittable f(kar) -> scalar. Every score sees a Kar (b + walk structure,
-built once per proposal). Time dependence lives only in energy(values, t). See optimize() below.
+A score is a Term(init, value, update) or a plain jittable f(kar) -> scalar (problem.py). Every score sees a Kar (b + walk
+structure, built once per proposal). Time dependence lives only in energy(values, t). See optimize() below.
 """
 import time
-from typing import NamedTuple, Callable, Any
 import numpy as np
 import jax
 import jax.numpy as jnp
 import problem as pr
-
-
-class Kar(NamedTuple):
-    b: Any; coord: Any; wid: Any; L: Any; iscyc: Any
-
-
-class Term(NamedTuple):
-    init: Callable    # init(kar) -> aux
-    value: Callable   # value(aux) -> scalar
-    update: Callable  # update(aux, kar_old, kar_new, i, j) -> aux (i, j = swapped rows of b)
-
-
-def kar(g, b):
-    return Kar(b, *pr.walkinfo(g, b))
+from problem import Kar, Term, kar  # noqa: F401 (the score API)
 
 
 def as_term(f):
@@ -45,22 +31,20 @@ def optimize(g, terms, energy=None, T=1.0, chains=16, steps=20000, block=500, se
     even/odd alternating); or a jittable callable t -> (chains,) array (annealing; swaps use T at the block end). T = 0 is greedy.
     init: None (random), list/array of b (round robin; last init_random chains random) or a previous Result (continue; use a
     new seed; t0 defaults to its t_end). Per-chain loop over one jitted block function; vmap=True vmaps it over chains.
-    Returns a dict (Result): b (chains, n), rung, E, values (nterms, chains), t_end, best (E, b, values), best_E/best_b/
-    best_vals per chain, top (list of (E, b) sorted: best + the 2*topk lowest-E states per chain, see
+    Returns a dict (Result): b (chains, n), rung, E, values (nterms, chains), t_end, best (E, b, values), top (list of (E, b)
+    sorted: best + the 2*topk lowest-E states per chain, see
     problem.distinct_karyotypes), history (dict of arrays: step, chain, T, E, v0..), trace (dict: steps, best, cur (nblk, chains
     by rung)), summary."""
     C = chains
     terms = [as_term(f) for f in (terms if isinstance(terms, (list, tuple)) and not isinstance(terms, Term) else [terms])]
-    nt = len(terms)
     energy = energy or sum_energy
-    callable_T = callable(T)
-    Tarr = None if callable_T else np.broadcast_to(np.asarray(T, float), (C,)).copy()
-    ladder = callable_T or np.ndim(T) == 1
+    ladder = callable(T) or np.ndim(T) == 1
+    if not callable(T):
+        T = (lambda Ta: lambda t: Ta)(jnp.asarray(np.broadcast_to(np.asarray(T, float), (C,))))
     prev = init if isinstance(init, dict) else None
     if t0 is None:
         t0 = int(prev['t_end']) if prev else 0
-    Tat = lambda t: np.asarray(T(t), float) if callable_T else Tarr  # host: T per rung at step t
-    Tf = (lambda t, r: jnp.asarray(T(t))[r]) if callable_T else (lambda t, r: jnp.asarray(Tarr)[r])
+    Tat = lambda t: np.asarray(T(t), float)  # host: T per rung at step t
 
     start = jax.jit(lambda b: tuple(tm.init(kar(g, b)) for tm in terms))
     vals_of = lambda aux: tuple(tm.value(a) for tm, a in zip(terms, aux))
@@ -96,7 +80,7 @@ def optimize(g, terms, energy=None, T=1.0, chains=16, steps=20000, block=500, se
             vo, vn = vals_of(aux), vals_of(aux2)
             Eo, En = energy(vo, tt), energy(vn, tt)
             dE = En - Eo
-            ok = (dE < 0) | (jnp.log(jax.random.uniform(k3)) < -dE / jnp.maximum(Tf(tt, rung), 1e-300))
+            ok = (dE < 0) | (jnp.log(jax.random.uniform(k3)) < -dE / jnp.maximum(jnp.asarray(T(tt))[rung], 1e-300))
             sel = lambda u, v: jax.tree.map(lambda p, q: jnp.where(ok, p, q), u, v)
             ko, aux = sel(kn, ko), sel(aux2, aux)
             E, v = jnp.where(ok, En, Eo), sel(vn, vo)
@@ -123,6 +107,8 @@ def optimize(g, terms, energy=None, T=1.0, chains=16, steps=20000, block=500, se
 
     # initial wirings
     key = jax.random.PRNGKey(seed)
+    if t0:  # a continued run must not replay the random numbers of the run it continues
+        key = jax.random.fold_in(key, t0)
     b0 = pr.random_b(g, jax.random.fold_in(key, 999), C)
     rung = np.arange(C)
     if prev is not None:
@@ -145,7 +131,7 @@ def optimize(g, terms, energy=None, T=1.0, chains=16, steps=20000, block=500, se
     stack = lambda L: jax.tree.map(lambda *x: jnp.stack(x), *L)
     unstack = lambda S, n: [jax.tree.map(lambda x: x[c], S) for c in range(n)]
     E = np.array([float(energy(vals_of(s['aux']), t0)) for s in states])
-    swaps = ladder and C > 1 and np.any(Tat(t0) > 0)
+    swaps = ladder and C > 1
 
     hist = history_every > 0
     H = []
@@ -188,7 +174,7 @@ def optimize(g, terms, energy=None, T=1.0, chains=16, steps=20000, block=500, se
                 with np.errstate(all='ignore'):
                     d = (1 / temps[r] - 1 / temps[r + 1]) * (E[ca] - E[cb])
                 sw_try[r] += 1
-                if np.log(np.random.default_rng([seed, blk, r]).random()) < d:
+                if np.log(np.random.default_rng([seed, blk, r] + ([t0] if t0 else [])).random()) < d:
                     rung[ca], rung[cb] = r + 1, r; sw_acc[r] += 1
         bg = min(float(s['bE']) for s in states); at = np.argsort(rung)
         tr_steps.append(te); tr_best.append(bg); tr_cur.append(E[at])
@@ -212,6 +198,5 @@ def optimize(g, terms, energy=None, T=1.0, chains=16, steps=20000, block=500, se
                 wall_s=wall, ms_per_proposal=wall / (nb * block * C) * 1e3)
     return dict(b=np.stack([np.asarray(s['b']) for s in states]), rung=rung, E=E,
                 values=np.array([[float(x) for x in vals_of(s['aux'])] for s in states]).T, t_end=t0 + nb * block,
-                best=best, best_E=ibE, best_b=np.stack([np.asarray(s['bb']) for s in states]),
-                best_vals=np.array([[float(x) for x in s['bv']] for s in states]).T, top=top, history=history,
+                best=best, top=top, history=history,
                 trace=dict(steps=np.array(tr_steps), best=np.array(tr_best), cur=np.array(tr_cur)), summary=summ)

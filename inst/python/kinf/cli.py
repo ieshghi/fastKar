@@ -120,14 +120,14 @@ def main():
     best, tr, H = res['best'], res['trace'], res['history']
     temps = np.zeros(a.chains) if a.method == 'greedy' else T
     with open(os.path.join(a.out, 'trace.tsv'), 'w') as f:
+        f.write('steps\tbest\t' + '\t'.join(f'T{t:g}' for t in temps) + '\n')
         if tr:
-            f.write('steps\tbest\t' + '\t'.join(f'T{t:g}' for t in temps) + '\n')
             for s, b, cur in zip(tr['steps'], tr['best'], tr['cur']):
                 f.write(f'{s}\t{b - ref:.6g}\t' + '\t'.join(f'{x - ref:.6g}' for x in cur) + '\n')
     if a.history > 0:
         with open(os.path.join(a.out, 'history.tsv'), 'w') as f:
+            f.write('steps\tchain\tT\tnll\n')
             if H:
-                f.write('steps\tchain\tT\tnll\n')
                 f.write(''.join(f'{s}\t{c}\t{t:g}\t{e - ref:.10g}\n' for s, c, t, e in zip(H['step'], H['chain'], H['T'], H['E'])))
 
     wk, circular = pr.perms_to_walks(g, pr.perms_from_b(g, best['b']))
