@@ -46,5 +46,5 @@ boundaries), and rebins the observed map onto the tiles with rebin_matrix() (cou
 the target are wired like the others but get no tiles: they enter the fit only through the walk distances
 between target tiles. The only free
 choice left is, at each node with CN > 1, which left-half copy continues into which right-half copy.
-Used by infer_karyotype(); the folder is read by load_problem() in inst/python/kinf/model.py.
+Used by infer_karyotype(); the folder is read by inst/python/kinf/problem.py (Graph.load, HiC.load).
 }

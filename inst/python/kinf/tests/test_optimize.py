@@ -1,30 +1,18 @@
-"""optimize.py vs the old engine (search.py) on the selftest problem; incremental NLL; scores; plain-score runs."""
+"""optimize.py on the selftest problem (agreement with the old engine was verified before it was removed, commit 3798ff7); incremental NLL; scores; plain-score runs."""
 import os, sys
 import numpy as np
 import jax, jax.numpy as jnp
 jax.config.update('jax_enable_x64', True)
 here = os.path.dirname(os.path.abspath(__file__)); kin = os.path.dirname(here)
 sys.path.insert(0, kin)
-import problem as pr, optimize as op, scores as sc, model, search
+import problem as pr, optimize as op, scores as sc
 
 folder = os.path.join(kin, 'selftest')
 g = pr.Graph.load(folder); h = pr.HiC.load(folder, g)
 def check(name, ok): print(('PASS ' if ok else 'FAIL ') + name, flush=True)
 quiet = lambda s: None
 
-# 1. old vs new
-P = model.load_problem(folder)
 nl = pr.nll_term(g, h)
-for name, Told, Tnew in (('pt', np.geomspace(1, 1000, 4), np.geomspace(1, 1000, 4)), ('greedy', None, 0.0)):
-    old = search.run(P, method=name, chains=4, steps=200, block=50, seed=1, topk=3, log=quiet)
-    new = op.optimize(g, [nl], T=Tnew, chains=4, steps=200, block=50, seed=1, topk=3, log=quiet)
-    rel = abs(old['nll'] - new['best']['E']) / abs(old['nll'])
-    sameb = np.array_equal(pr.b_from_perms(g, old['perms']), new['best']['b'])
-    dk = pr.distinct_karyotypes(g, new['top'], 3)
-    on = [t['nll'] for t in old['top']]; nn = [t['E'] for t in dk]
-    print(f'  {name}: old {old["nll"]:.10g} new {new["best"]["E"]:.10g} rel {rel:.2e}; top old {np.round(on,4)} new {np.round(nn,4)}')
-    check(f'{name} best NLL', rel <= 1e-8); check(f'{name} best b', sameb)
-    check(f'{name} top-k NLLs', len(on) == len(nn) and np.allclose(on, nn, rtol=1e-8, atol=0))
 
 # 2. incremental vs full NLL after 300 random moves
 b = pr.random_b(g, jax.random.PRNGKey(5), 1)[0]

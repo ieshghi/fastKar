@@ -11,3 +11,4 @@ src/symbols.rds
 # kinf (inst/python/kinf) Python caches
 __pycache__/
 *.pyc
+*.swp

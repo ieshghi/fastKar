@@ -2,7 +2,6 @@
 
 A score is a Term(init, value, update) or a plain jittable f(kar) -> scalar. Every score sees a Kar (b + walk structure,
 built once per proposal). Time dependence lives only in energy(values, t). See optimize() below.
-random_perms is kept for the old engine (search.py, infer.py).
 """
 import time
 from typing import NamedTuple, Callable, Any
@@ -34,16 +33,6 @@ def as_term(f):
 
 def sum_energy(values, t):
     return sum(values)
-
-
-def random_perms(problem, key, k):  # legacy (search.py, infer.py)
-    out = {}
-    keys = jax.random.split(key, len(problem.var_nodes))
-    for kk, n in zip(keys, sorted(problem.var_nodes)):
-        cn = len(problem.var_nodes[n][0])
-        idx = jax.vmap(lambda q: jax.random.permutation(q, cn))(jax.random.split(kk, k))
-        out[n] = jax.nn.one_hot(idx, cn, dtype=jnp.float64)
-    return out
 
 
 def optimize(g, terms, energy=None, T=1.0, chains=16, steps=20000, block=500, seed=0, init=None, init_random=0,

@@ -65,8 +65,9 @@ steps may be needed.}
 
 \item{gpu}{local backend: GPU index (sets CUDA_VISIBLE_DEVICES); NULL leaves it unset.}
 
-\item{cores}{local backend: CPU cores to pin the Python process to, e.g. 0:7 (each JAX process otherwise
-starts ~1000 threads, and the per-user thread limit can make parallel runs fail). NULL: no pinning.}
+\item{cores}{local backend: CPU cores to pin the Python process to, e.g. 0:7. NULL: no pinning by R; the Python
+process then caps itself to FASTKAR_KINF_CORES CPUs (default 8; 0 = no cap), because each JAX process otherwise
+starts ~1000 threads and the per-user thread limit can make parallel runs fail.}
 
 \item{backend}{'local' (run here) or 'slurm' (submit a GPU job with sbatch).}
 
@@ -108,6 +109,6 @@ with history_every > 0 also history;
 with backend = 'slurm', wait = FALSE a kinf_job handle.
 }
 \description{
-Exports gg and the map with prep_data_for_py(), runs inst/python/kinf/infer.py (locally or as a Slurm job)
+Exports gg and the map with prep_data_for_py(), runs inst/python/kinf/cli.py (locally or as a Slurm job)
 and reads the best wiring back as a gWalk on gg. Set up the Python side once with install_kinf().
 }

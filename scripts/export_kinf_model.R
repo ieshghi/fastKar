@@ -1,5 +1,5 @@
 # export_kinf_model.R: dump the fastKar Hi-C forward-model constants to inst/python/kinf/data/fastkar_model.json
-# (read by inst/python/kinf/hic_model.py). Rerun whenever the forward model (splineobj, interchrom_density,
+# (read by inst/python/kinf/problem.py). Rerun whenever the forward model (splineobj, interchrom_density,
 # distance_density) changes; tests/testthat/test-kinf-model-json.R fails until you do.
 # Usage (from the repo root): Rscript scripts/export_kinf_model.R
 suppressMessages(devtools::load_all('.', quiet = TRUE))

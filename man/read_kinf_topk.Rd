@@ -2,12 +2,12 @@
 % Please edit documentation in R/kinf.R
 \name{read_kinf_topk}
 \alias{read_kinf_topk}
-\title{Read a topk.json written by infer.py --topk: list(kars = gWalks on graph (or plain walk lists when graph is
+\title{Read a topk.json written by cli.py --topk: list(kars = gWalks on graph (or plain walk lists when graph is
 NULL), best first, nlls).}
 \usage{
 read_kinf_topk(path, graph = NULL)
 }
 \description{
-Read a topk.json written by infer.py --topk: list(kars = gWalks on graph (or plain walk lists when graph is
+Read a topk.json written by cli.py --topk: list(kars = gWalks on graph (or plain walk lists when graph is
 NULL), best first, nlls).
 }

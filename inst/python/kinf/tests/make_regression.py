@@ -1,4 +1,5 @@
-"""Freeze the numbers of the OLD modules (model, delta, walks, optimize, infer) on selftest/ -> regression.json."""
+"""Freeze the numbers of the OLD modules (model, delta, walks, optimize, infer) on selftest/ -> regression.json.
+Ran on fastKar commit 3798ff7 (the modules it imports were removed after); needs that checkout to rerun."""
 import os, sys, json, copy
 import numpy as np
 import jax

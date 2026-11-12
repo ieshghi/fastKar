@@ -2,12 +2,12 @@
 % Please edit documentation in R/kinf.R
 \name{read_kinf_gwalks}
 \alias{read_kinf_gwalks}
-\title{Read a gwalks.json written by infer.py (signed snode ids + circular flags) as a gWalk on graph
+\title{Read a gwalks.json written by cli.py (signed snode ids + circular flags) as a gWalk on graph
 (the gGraph that was exported), or as a plain list when graph is NULL.}
 \usage{
 read_kinf_gwalks(path, graph = NULL)
 }
 \description{
-Read a gwalks.json written by infer.py (signed snode ids + circular flags) as a gWalk on graph
+Read a gwalks.json written by cli.py (signed snode ids + circular flags) as a gWalk on graph
 (the gGraph that was exported), or as a plain list when graph is NULL.
 }

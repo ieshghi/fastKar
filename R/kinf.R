@@ -1,12 +1,12 @@
 # kinf.R: R front end to the Python karyotype search shipped in inst/python/kinf (JAX; exact-NLL parallel
 # tempering over the wirings of a genome graph). Setup once with install_kinf(); then
 #   res = infer_karyotype(gg, hic = 'sample.mcool', pix.size = 1e6)
-# runs prep_data_for_py() -> infer.py -> read_kinf_gwalks(), locally or as a Slurm job.
+# runs prep_data_for_py() -> cli.py -> read_kinf_gwalks(), locally or as a Slurm job.
 
 .kinf_uv_version = '0.12.24'
 .kinf_cache = new.env(parent = emptyenv())
 
-#' Folder of the shipped Python code (infer.py and modules); works installed and under devtools::load_all().
+#' Folder of the shipped Python code (cli.py and modules); works installed and under devtools::load_all().
 kinf_dir = function(){
   d = system.file('python', 'kinf', package = 'fastKar')
   if (!nzchar(d)) stop('inst/python/kinf not found in the fastKar installation')
@@ -206,7 +206,7 @@ install_kinf = function(envdir = NULL, build = c('auto', 'cuda12', 'cpu'), pytho
 #'
 #' @param python interpreter (default: kinf_python()).
 #' @param backend 'local' or 'slurm' (submits the test as a short GPU job with the Slurm defaults).
-#' @param device passed to infer.py ('auto', 'gpu', 'cpu').
+#' @param device passed to cli.py ('auto', 'gpu', 'cpu').
 #' @param slurm Slurm overrides for backend = 'slurm'.
 #' @return list(ok, device, summary), invisibly.
 kinf_check = function(python = NULL, backend = c('local', 'slurm'), device = c('auto', 'gpu', 'cpu'),
@@ -250,11 +250,11 @@ kinf_check = function(python = NULL, backend = c('local', 'slurm'), device = c('
   d
 }
 
-# Run (local) or submit (slurm) infer.py on an exported problem folder; output goes to workdir/out.
+# Run (local) or submit (slurm) cli.py on an exported problem folder; output goes to workdir/out.
 .kinf_launch = function(problem, workdir, python, args, truth = FALSE, backend = 'local', slurm = list(),
                         wait = TRUE, gpu = NULL, cores = NULL, verbose = TRUE){
   odir = file.path(workdir, 'out')
-  cmd = c(python, file.path(kinf_dir(), 'infer.py'), problem, odir)
+  cmd = c(python, file.path(kinf_dir(), 'cli.py'), problem, odir)
   args = Filter(Negate(is.null), args)
   for (nm in names(args)) cmd = c(cmd, paste0('--', nm), format(args[[nm]], scientific = FALSE))
   if (truth) cmd = c(cmd, '--truth')
@@ -266,7 +266,7 @@ kinf_check = function(python = NULL, backend = c('local', 'slurm'), device = c('
     status = system2('env', c(envs, shQuote(cmd)), stdout = if (verbose) '' else log,
                      stderr = if (verbose) '' else log)
     if (!identical(as.integer(status), 0L))
-      stop('infer.py failed (exit ', status, '); problem folder kept in ', problem,
+      stop('cli.py failed (exit ', status, '); problem folder kept in ', problem,
            if (!verbose) paste0('\n', paste(utils::tail(readLines(log), 20), collapse = '\n')))
     return(structure(list(job_id = NA, workdir = workdir, backend = 'local'), class = 'kinf_job'))
   }
@@ -331,7 +331,7 @@ kinf_check = function(python = NULL, backend = c('local', 'slurm'), device = c('
 
 #' Infer a karyotype (wiring of gg) from Hi-C by exact-NLL search (parallel tempering by default).
 #'
-#' Exports gg and the map with prep_data_for_py(), runs inst/python/kinf/infer.py (locally or as a Slurm job)
+#' Exports gg and the map with prep_data_for_py(), runs inst/python/kinf/cli.py (locally or as a Slurm job)
 #' and reads the best wiring back as a gWalk on gg. Set up the Python side once with install_kinf().
 #'
 #' @param gg gGraph with node copy numbers (gg$nodes$dt$cn) and junction copy numbers (gg$edges$dt$cn).
@@ -351,8 +351,9 @@ kinf_check = function(python = NULL, backend = c('local', 'slurm'), device = c('
 #'   steps may be needed.
 #' @param device 'auto' (GPU if available, else CPU with a warning), 'gpu' (fail without one), 'cpu'.
 #' @param gpu local backend: GPU index (sets CUDA_VISIBLE_DEVICES); NULL leaves it unset.
-#' @param cores local backend: CPU cores to pin the Python process to, e.g. 0:7 (each JAX process otherwise
-#'   starts ~1000 threads, and the per-user thread limit can make parallel runs fail). NULL: no pinning.
+#' @param cores local backend: CPU cores to pin the Python process to, e.g. 0:7. NULL: no pinning by R; the Python
+#'   process then caps itself to FASTKAR_KINF_CORES CPUs (default 8; 0 = no cap), because each JAX process otherwise
+#'   starts ~1000 threads and the per-user thread limit can make parallel runs fail.
 #' @param backend 'local' (run here) or 'slurm' (submit a GPU job with sbatch).
 #' @param slurm Slurm settings overriding the config defaults: partition, gres, time, mem, cpus, account, extra
 #'   (character vector of further sbatch arguments).
@@ -444,7 +445,7 @@ infer_karyotype = function(gg, hic, depth = NULL, pix.size = 1e6, target_region 
   out
 }
 
-#' Read a topk.json written by infer.py --topk: list(kars = gWalks on graph (or plain walk lists when graph is
+#' Read a topk.json written by cli.py --topk: list(kars = gWalks on graph (or plain walk lists when graph is
 #' NULL), best first, nlls).
 read_kinf_topk = function(path, graph = NULL){
   x = jsonlite::read_json(path, simplifyVector = FALSE)
@@ -489,7 +490,7 @@ print.kinf_job = function(x, ...){
   invisible(x)
 }
 
-# warm-start file for infer.py --init, copied into workdir (visible to Slurm jobs): from a previous result /
+# warm-start file for cli.py --init, copied into workdir (visible to Slurm jobs): from a previous result /
 # kinf_job (topk.json if present, else gwalks.json), a .npy / .json path, or a gWalk (written as gwalks.json)
 .kinf_init_file = function(init, workdir){
   if (is.null(init)) return(NULL)
@@ -515,7 +516,7 @@ print.kinf_job = function(x, ...){
   f
 }
 
-#' Read a gwalks.json written by infer.py (signed snode ids + circular flags) as a gWalk on graph
+#' Read a gwalks.json written by cli.py (signed snode ids + circular flags) as a gWalk on graph
 #' (the gGraph that was exported), or as a plain list when graph is NULL.
 read_kinf_gwalks = function(path, graph = NULL){
   x = jsonlite::read_json(path, simplifyVector = FALSE)  # keep length-1 walks as lists

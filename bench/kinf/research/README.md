@@ -1,5 +1,7 @@
 # kinf research drivers
 
+Note: the Python drivers here import the old modules (model, hic_model, walks, delta, search, infer) and need the kinf code as of fastKar commit 3798ff7 (`git worktree add <dir> 3798ff7`); they are not ported to problem.py / optimize.py.
+
 Moved here on 2026-11-11 from the karyotype-inference repo (`~/projects/karyotyping/karyotype-inference`, branch `fastkar-port`,
 commit `e22426e`), which is now frozen. The Python scripts import the shipped modules in `inst/python/kinf/`, and the
 R exports call the package's `prep_data_for_py()`. Run everything from the fastKar repo root with the kinf env:

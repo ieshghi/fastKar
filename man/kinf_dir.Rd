@@ -2,10 +2,10 @@
 % Please edit documentation in R/kinf.R
 \name{kinf_dir}
 \alias{kinf_dir}
-\title{Folder of the shipped Python code (infer.py and modules); works installed and under devtools::load_all().}
+\title{Folder of the shipped Python code (cli.py and modules); works installed and under devtools::load_all().}
 \usage{
 kinf_dir()
 }
 \description{
-Folder of the shipped Python code (infer.py and modules); works installed and under devtools::load_all().
+Folder of the shipped Python code (cli.py and modules); works installed and under devtools::load_all().
 }

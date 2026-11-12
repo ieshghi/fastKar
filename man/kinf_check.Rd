@@ -19,7 +19,7 @@ kinf_check(
 
 \item{backend}{'local' or 'slurm' (submits the test as a short GPU job with the Slurm defaults).}
 
-\item{device}{passed to infer.py ('auto', 'gpu', 'cpu').}
+\item{device}{passed to cli.py ('auto', 'gpu', 'cpu').}
 
 \item{slurm}{Slurm overrides for backend = 'slurm'.}
 }

@@ -6,7 +6,7 @@
 #' the target are wired like the others but get no tiles: they enter the fit only through the walk distances
 #' between target tiles. The only free
 #' choice left is, at each node with CN > 1, which left-half copy continues into which right-half copy.
-#' Used by infer_karyotype(); the folder is read by load_problem() in inst/python/kinf/model.py.
+#' Used by infer_karyotype(); the folder is read by inst/python/kinf/problem.py (Graph.load, HiC.load).
 #'
 #' @param gg gGraph with node and junction copy numbers (cn).
 #' @param gm gMatrix of observed counts.
