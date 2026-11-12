@@ -1,8 +1,9 @@
 #' Export a gGraph + Hi-C map as a problem folder for the Python karyotype search (kinf)
 #'
 #' Splits every node of gg into a left and a right half, gives each copy of each half-node its
-#' own id, fixes the junction copies to half-node copies, tiles the target at pix.size (cut at half-node
-#' boundaries), and rebins the observed map onto the tiles with rebin_matrix() (count-conserving). Nodes outside
+#' own id, fixes the junction copies to half-node copies, tiles the data bins at pix.size and at node boundaries
+#' (the tiles forward_simulate() uses; each tile copy sits on the half-node copy containing its centre), and
+#' rebins the observed map onto the data bins with rebin_matrix() (count-conserving). Nodes outside
 #' the target are wired like the others but get no tiles: they enter the fit only through the walk distances
 #' between target tiles. The only free
 #' choice left is, at each node with CN > 1, which left-half copy continues into which right-half copy.
@@ -45,24 +46,29 @@ prep_data_for_py <- function(gg,gm,depth,purity=1,pix.size=1e5,target_region=NUL
 
   # the fit is scored on the data's own bins (2026-11-11, user: no assumption about how counts are spread inside a bin;
   # reload the data at a finer resolution if needed): bins = the observed bins overlapping the target. The model is
-  # simulated on tiles = bins cut at pix.size and at half-node boundaries, so every tile lies inside one bin, and the
-  # expected map is summed into bins before scoring (as bestfit_search() simulates on the observed bins and compmaps()
-  # rebins onto them).
+  # simulated on tiles = bins cut at pix.size and at node boundaries (exactly the tiles forward_simulate() uses; not at
+  # half-node boundaries, 2026-11-12), so every tile lies inside one bin, and the expected map is summed into bins before
+  # scoring (as bestfit_search() simulates on the observed bins and compmaps() rebins onto them).
   bins = gm$gr[gm$gr %^% target_region]
   bins = GRanges(as.character(seqnames(bins)),ranges(bins))   # no seqinfo: a map's seqlengths can differ from the graph's
-  #tiled.target = gr.merge(gr.tile(target_region,pix.size),dt2gr(nodesdt.split))[,c()]
-  tiled.target = gr.merge(gr.tile(bins,pix.size),dt2gr(nodesdt.split[cn>0]))[,c()]
+  tiled.target = gr.merge(gr.tile(bins,pix.size),dt2gr(targetnodes[cn>0,.(seqnames,start,end)]))[,c()]
   tb = findOverlaps(GRanges(as.character(seqnames(tiled.target)),ranges(tiled.target)),bins,type='within')
   if (length(tb) != length(tiled.target) || any(duplicated(queryHits(tb)))){stop('prep_data_for_py: a tile is not inside exactly one data bin')}
   tiled.target$bin.id = subjectHits(tb)[order(queryHits(tb))]
 
-  #we want to consider every "copy" of every tile uniquely
-  dedup.tiles = gr2dt(gr.merge(tiled.target,dt2gr(dedup.nodes)))[,tile.id:=query.id]
-
-  #When we simulate later, we will be calculating distances between node-halves because that is the finest degree of information given by the genome graph, but then we will extrapolate from this the distances between pixels. So here we calculate the offset between a given pixel and the left/right edges of the half-node in which it is.
+  # every copy of every tile: the forward model treats a tile as a point at its centre (forward_kernel.cpp: mid), so a
+  # tile copy belongs to the copy of the half-node that contains its centre (one copy per node copy), even when the tile
+  # spans the node's midpoint; leftdist / rightdist = distance from the centre to that half's left / right end (+ 1/2),
+  # through which kinf measures distances along the walk.
+  tc = gr2dt(tiled.target)[,.(seqnames,start,end,width)][,tile.id:=.I]
+  ctr = tc[,.(seqnames,start=floor((start+end)/2),end=floor((start+end)/2),tile.id)]
+  ov = findOverlaps(GRanges(as.character(ctr$seqnames),IRanges(ctr$start,ctr$end)),
+                    GRanges(as.character(dedup.nodes$seqnames),IRanges(dedup.nodes$start,dedup.nodes$end)))
+  dedup.tiles = data.table(tile.id=ctr$tile.id[queryHits(ov)],unique.id=dedup.nodes$unique.id[subjectHits(ov)])
+  dedup.tiles[,`:=`(width=tc$width[tile.id],start=tc$start[tile.id],end=tc$end[tile.id])]
   dedup.tiles[,leftdist:=start-dedup.nodes[unique.id]$start + width/2]
   dedup.tiles[,rightdist:=dedup.nodes[unique.id]$end - end + width/2]
-  dedup.tiles = unique(dedup.tiles[,.(width,unique.id,tile.id,leftdist,rightdist)])
+  dedup.tiles = dedup.tiles[order(tile.id,unique.id),.(width,unique.id,tile.id,leftdist,rightdist)]
 
   # now we actually set up the machinery for permutations at a given node. keep track of every unique junction
   dedup.edges = edgesdt[rep(1:.N,cn)][,cn:=NULL][,edge_id:=.I]

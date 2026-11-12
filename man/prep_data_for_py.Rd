@@ -41,8 +41,9 @@ named list of the exported tables.
 }
 \description{
 Splits every node of gg into a left and a right half, gives each copy of each half-node its
-own id, fixes the junction copies to half-node copies, tiles the target at pix.size (cut at half-node
-boundaries), and rebins the observed map onto the tiles with rebin_matrix() (count-conserving). Nodes outside
+own id, fixes the junction copies to half-node copies, tiles the data bins at pix.size and at node boundaries
+(the tiles forward_simulate() uses; each tile copy sits on the half-node copy containing its centre), and
+rebins the observed map onto the data bins with rebin_matrix() (count-conserving). Nodes outside
 the target are wired like the others but get no tiles: they enter the fit only through the walk distances
 between target tiles. The only free
 choice left is, at each node with CN > 1, which left-half copy continues into which right-half copy.
