@@ -613,20 +613,51 @@ def make_nll_term(g, hic, bigdist=1e12, dcut=1e10, theta=2.0, weighted=True, cap
         return f
     branches = [branch(c) for c in caps]
 
+    def delta(mu, info, info2, i, j):
+        """exact change of the NLL and the new bin map for swapping rows i, j; info / info2 = walk structure before / after"""
+        wid = info[1]; tcw = wid[Lu]
+        mask = (tcw == wid[var_a[i]]) | (tcw == wid[var_a[j]])
+        cnt = mask.sum()
+        k = jnp.searchsorted(caps_arr, cnt)
+        return jax.lax.switch(k, branches, (mask, cnt, info, info2, mu))
+
     def propose(state, i, j):
         """exact proposal for swapping rows i, j: returns (dnll, new state)"""
         b = state['b']; info = state['info']
         b2 = b.at[i].set(b[j]).at[j].set(b[i])
         info2 = walkinfo(g, b2, bigdist)
-        wid = info[1]; tcw = wid[Lu]
-        mask = (tcw == wid[var_a[i]]) | (tcw == wid[var_a[j]])
-        cnt = mask.sum()
-        k = jnp.searchsorted(caps_arr, cnt)
-        dnll, mu2 = jax.lax.switch(k, branches, (mask, cnt, info, info2, state['mu']))
+        dnll, mu2 = delta(state['mu'], info, info2, i, j)
         return dnll, dict(b=b2, info=info2, mu=mu2, nll=state['nll'] + dnll)
 
     def affected(state, i, j):  # |S| for diagnostics
         wid = state['info'][1]; tcw = wid[Lu]
         return ((tcw == wid[var_a[i]]) | (tcw == wid[var_a[j]])).sum()
 
-    return dict(init=init, propose=propose, affected=affected, nll_of=nll_of, full_mu=full_mu, caps=caps)
+    return dict(init=init, propose=propose, affected=affected, nll_of=nll_of, full_mu=full_mu, caps=caps, delta=delta)
+
+def nll_term(g, hic, **kw):
+    """the exact hard NLL as an optimize.Term: aux = (bin map mu, nll); update uses the walk structures kar_old / kar_new
+    (no walkinfo inside). Same capacity-ladder update as make_nll_term."""
+    from optimize import Term
+    P = make_nll_term(g, hic, **kw)
+    def init(kar):
+        mu = to_bins(hic, P['full_mu'](kar[1:]))
+        return (mu, P['nll_of'](mu))
+    def update(aux, kar_old, kar_new, i, j):
+        dnll, mu2 = P['delta'](aux[0], kar_old[1:], kar_new[1:], i, j)
+        return (mu2, aux[1] + dnll)
+    return Term(init=init, value=lambda aux: aux[1], update=update)
+
+def distinct_karyotypes(g, top, k):
+    """the k lowest-E entries of top (pairs (E, b)) that are distinct karyotypes: list of dict(E, b, walks, circular)"""
+    out, seen = [], set()
+    for E, b in sorted(top, key=lambda t: t[0]):
+        wk, circ = perms_to_walks(g, perms_from_b(g, b))
+        key = tuple(sorted(canonical(w, x) for w, x in zip(wk, circ)))
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(dict(E=float(E), b=np.asarray(b), walks=wk, circular=circ))
+        if len(out) == k:
+            break
+    return out
