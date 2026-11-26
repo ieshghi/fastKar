@@ -27,3 +27,11 @@ test_that('graph_seqlengths gives a parsed range the graph lengths', {
     expect_equal(GenomeInfoDb::seqlengths(opt('graph_seqlengths')(gr, fx$gg))[[chr]],
                  GenomeInfoDb::seqlengths(fx$gg$nodes$gr)[[chr]])
 })
+
+test_that('identifiability always analyses the full graph (no graph_mode argument)', {
+    expect_false('graph_mode' %in% names(formals(opt('identifiability_context'))))
+    expect_false('graph_mode' %in% names(formals(opt('run_graph_local_identifiability'))))
+    fx = load_fixture('ccle_pyrgo')
+    ctx = opt('identifiability_context')(fx$gg, footprint = fx$ft)
+    expect_identical(ctx$graph, fx$gg)
+})

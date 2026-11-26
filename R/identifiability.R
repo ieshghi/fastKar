@@ -12,13 +12,11 @@
 
 identifiability_context <- function(graph,
                                     footprint = NULL,
-                                    graph_mode = c('footprint', 'full'),
                                     wholegenome = NULL,
                                     hic_binsperft = 100,
                                     footprint_buffer_fraction = 1/5,
                                     footprint_buffer_min = 1e4,
                                     edit_mode = c('fragment', 'footprint', 'node')) {
-    graph_mode = match.arg(graph_mode)
     edit_mode = match.arg(edit_mode)
     if (is.null(footprint)) {
         footprint = graph$footprint
@@ -40,13 +38,7 @@ identifiability_context <- function(graph,
     ft = streduce(ft0 + buffer)
     target_width = sum(width(ft))
     hic_resolution = 1e3 * ceiling(target_width / (1e3 * hic_binsperft))
-    graph_cut = loosefix(graph$copy$disjoin(ft) %&% ft)
-    if (graph_mode == 'footprint') {
-        analysis_graph = graph_cut
-    } else {
-        analysis_graph = graph
-    }
-    use.nodes = unique((analysis_graph$gr %&% ft)$node.id)
+    use.nodes = unique((graph$gr %&% ft)$node.id)
     ## How candidates are compared to the truth (edit_dist_cpp on use.nodes):
     ## 'node': whole walks, each node weighted by its full width (original).
     ## 'footprint': whole walks, each node weighted by its bp inside the
@@ -55,17 +47,17 @@ identifiability_context <- function(graph,
     ##   buffered footprint and compared as in-region fragments, so karyotypes
     ##   that differ only in how in-region pieces are linked through sequence
     ##   outside it (e.g. which copies share a chromosome) count as identical.
-    edit_widths = if (edit_mode != 'node') .identifiability_edit_widths(analysis_graph, ft) else NULL
-    split_ends = if (edit_mode == 'fragment') .identifiability_split_ends(analysis_graph, ft) else NULL
+    edit_widths = if (edit_mode != 'node') .identifiability_edit_widths(graph, ft) else NULL
+    split_ends = if (edit_mode == 'fragment') .identifiability_split_ends(graph, ft) else NULL
     list(
-        graph = analysis_graph,
+        graph = graph,
         target_region = ft,
         pix.size = hic_resolution,
         use.nodes = use.nodes,
         edit_mode = edit_mode,
         edit_widths = edit_widths,
         split_ends = split_ends,
-        event_size = .identifiability_event_size(analysis_graph, use.nodes, edit_widths),
+        event_size = .identifiability_event_size(graph, use.nodes, edit_widths),
         footprint0 = ft0,
         target_width = target_width,
         footprint_buffer = buffer,
@@ -440,7 +432,6 @@ run_graph_local_identifiability <- function(graph,
                                             n_walkers = 200,
                                             n_swaps = 3,
                                             n_obs = 100,
-                                            graph_mode = 'full',
                                             modalities = c('hic', 'longread'),
                                             longread_lengths = c(1e5, 1e7),
                                             depth = 10,
@@ -454,7 +445,7 @@ run_graph_local_identifiability <- function(graph,
                                             truth_graph_dir = NULL,
                                             mc.cores = 1) {
     modalities = match.arg(modalities, choices = c('hic', 'longread'), several.ok = TRUE)
-    ctx = identifiability_context(graph = graph, footprint = footprint, graph_mode = graph_mode,
+    ctx = identifiability_context(graph = graph, footprint = footprint,
                                   wholegenome = wholegenome, hic_binsperft = hic_binsperft,
                                   footprint_buffer_fraction = footprint_buffer_fraction,
                                   footprint_buffer_min = footprint_buffer_min, edit_mode = edit_mode)
@@ -468,7 +459,7 @@ run_graph_local_identifiability <- function(graph,
     if (!is.null(truth_graph_dir)) {
         tg = readRDS(file.path(truth_graph_dir, paste0(event$pair, '.rds')))
         if (!is.null(tg$copy)) tg = tg$copy
-        tctx = identifiability_context(graph = tg, footprint = footprint, graph_mode = graph_mode,
+        tctx = identifiability_context(graph = tg, footprint = footprint,
                                        wholegenome = wholegenome, hic_binsperft = hic_binsperft,
                                        footprint_buffer_fraction = footprint_buffer_fraction,
                                        footprint_buffer_min = footprint_buffer_min, edit_mode = edit_mode)
